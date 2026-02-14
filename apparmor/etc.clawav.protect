@@ -1,0 +1,66 @@
+# AppArmor profile: protect /etc/clawav/ from modification by common tools
+#
+# Defense-in-depth layer. Primary protection is chattr +i on critical files.
+# This profile denies common binaries from writing to ClawAV config paths.
+# Root can still bypass via cap_mac_admin or by unloading this profile,
+# but the attempt will be logged and detected by auditd.
+#
+# Install: sudo cp etc.clawav.protect /etc/apparmor.d/
+#          sudo apparmor_parser -r /etc/apparmor.d/etc.clawav.protect
+
+abi <abi/3.0>,
+
+# Deny /usr/bin/rm from touching ClawAV paths
+profile clawav.protect.rm /usr/bin/rm flags=(attach_disconnected, complain) {
+  #include <abstractions/base>
+  deny /etc/clawav/** wdl,
+  deny /etc/clawav/ wdl,
+  deny /usr/local/bin/clawav wdl,
+  deny /etc/systemd/system/clawav.service wdl,
+  deny /etc/sudoers.d/clawav-deny wdl,
+  /** rwlkm,
+}
+
+# Deny /usr/bin/mv from touching ClawAV paths
+profile clawav.protect.mv /usr/bin/mv flags=(attach_disconnected, complain) {
+  #include <abstractions/base>
+  deny /etc/clawav/** wdl,
+  deny /etc/clawav/ wdl,
+  deny /usr/local/bin/clawav wdl,
+  deny /etc/systemd/system/clawav.service wdl,
+  deny /etc/sudoers.d/clawav-deny wdl,
+  /** rwlkm,
+}
+
+# Deny /usr/bin/chattr from removing immutable flags on ClawAV paths
+profile clawav.protect.chattr /usr/bin/chattr flags=(attach_disconnected, complain) {
+  #include <abstractions/base>
+  deny /etc/clawav/** w,
+  deny /etc/clawav/ w,
+  deny /usr/local/bin/clawav w,
+  deny /etc/systemd/system/clawav.service w,
+  deny /etc/sudoers.d/clawav-deny w,
+  /** rwlkm,
+}
+
+# Deny /usr/bin/cp from overwriting ClawAV paths
+profile clawav.protect.cp /usr/bin/cp flags=(attach_disconnected, complain) {
+  #include <abstractions/base>
+  deny /etc/clawav/** wdl,
+  deny /etc/clawav/ wdl,
+  deny /usr/local/bin/clawav wdl,
+  deny /etc/systemd/system/clawav.service wdl,
+  deny /etc/sudoers.d/clawav-deny wdl,
+  /** rwlkm,
+}
+
+# Deny /usr/bin/chmod from changing perms on ClawAV paths
+profile clawav.protect.chmod /usr/bin/chmod flags=(attach_disconnected, complain) {
+  #include <abstractions/base>
+  deny /etc/clawav/** w,
+  deny /etc/clawav/ w,
+  deny /usr/local/bin/clawav w,
+  deny /etc/systemd/system/clawav.service w,
+  deny /etc/sudoers.d/clawav-deny w,
+  /** rwlkm,
+}

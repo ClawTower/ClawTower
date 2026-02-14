@@ -152,7 +152,14 @@ pub fn parse_to_event(line: &str, watched_users: Option<&[String]>) -> Option<Pa
         });
     }
 
-    // For non-EXECVE lines, filter by watched users
+    // Always allow tamper-detection events through regardless of user filter
+    let is_tamper = line.contains("key=\"clawav-tamper\"")
+        || line.contains("key=clawav-tamper")
+        || line.contains("key=\"clawav-config\"")
+        || line.contains("key=clawav-config");
+
+    // For non-EXECVE lines, filter by watched users (unless tamper event)
+    if !is_tamper {
     if let Some(users) = watched_users {
         let matches = users.iter().any(|uid| {
             line.contains(&format!("uid={}", uid)) || line.contains(&format!("auid={}", uid))
@@ -160,6 +167,7 @@ pub fn parse_to_event(line: &str, watched_users: Option<&[String]>) -> Option<Pa
         if !matches {
             return None;
         }
+    }
     }
 
     if line.contains("type=SYSCALL") {
@@ -200,6 +208,33 @@ pub fn parse_to_event(line: &str, watched_users: Option<&[String]>) -> Option<Pa
         });
     }
 
+    None
+}
+
+/// Check if an audit event matches ClawAV tamper-detection keys
+pub fn check_tamper_event(event: &ParsedEvent) -> Option<Alert> {
+    let line = &event.raw;
+    // Detect auditd events with our tamper-detection keys
+    if line.contains("key=\"clawav-tamper\"") || line.contains("key=clawav-tamper") {
+        let detail = event.command.as_deref()
+            .or(event.file_path.as_deref())
+            .unwrap_or(&line[..line.len().min(200)]);
+        return Some(Alert::new(
+            Severity::Critical,
+            "auditd:tamper",
+            &format!("🚨 TAMPER DETECTED: chattr executed (possible immutable flag removal) — {}", detail),
+        ));
+    }
+    if line.contains("key=\"clawav-config\"") || line.contains("key=clawav-config") {
+        let detail = event.file_path.as_deref()
+            .or(event.command.as_deref())
+            .unwrap_or(&line[..line.len().min(200)]);
+        return Some(Alert::new(
+            Severity::Critical,
+            "auditd:tamper",
+            &format!("🚨 CONFIG TAMPER: write/attr change on protected ClawAV file — {}", detail),
+        ));
+    }
     None
 }
 
@@ -305,6 +340,11 @@ pub async fn tail_audit_log_with_behavior_and_policy(
             }
             Ok(_) => {
                 if let Some(event) = parse_to_event(&line, watched_users.as_deref()) {
+                    // Check for ClawAV tamper events (highest priority — fires for all users)
+                    if let Some(tamper_alert) = check_tamper_event(&event) {
+                        let _ = tx.send(tamper_alert).await;
+                    }
+
                     // Run policy engine first (if available)
                     if let Some(ref engine) = policy_engine {
                         if let Some(verdict) = engine.evaluate(&event) {
@@ -450,6 +490,44 @@ mod tests {
         assert!(parse_to_event(line1, Some(&watched)).is_some());
         assert!(parse_to_event(line2, Some(&watched)).is_some());
         assert!(parse_to_event(line3, Some(&watched)).is_none());
+    }
+
+    #[test]
+    fn test_tamper_detection_chattr_key() {
+        let line = r#"type=SYSCALL msg=audit(1707849600.123:456): arch=c00000b7 syscall=221 success=yes uid=0 exe="/usr/bin/chattr" key="clawav-tamper""#;
+        let event = parse_to_event(line, None).unwrap();
+        let tamper = check_tamper_event(&event);
+        assert!(tamper.is_some());
+        let alert = tamper.unwrap();
+        assert_eq!(alert.severity, Severity::Critical);
+        assert!(alert.message.contains("TAMPER"));
+    }
+
+    #[test]
+    fn test_tamper_detection_config_key() {
+        let line = r#"type=SYSCALL msg=audit(1707849600.123:456): arch=c00000b7 syscall=56 success=yes uid=0 name="/etc/clawav/admin.key.hash" key="clawav-config""#;
+        let event = parse_to_event(line, None).unwrap();
+        let tamper = check_tamper_event(&event);
+        assert!(tamper.is_some());
+        let alert = tamper.unwrap();
+        assert_eq!(alert.severity, Severity::Critical);
+        assert!(alert.message.contains("CONFIG TAMPER"));
+    }
+
+    #[test]
+    fn test_tamper_events_bypass_user_filter() {
+        // Tamper events should be parsed even when watched_users doesn't include root
+        let line = r#"type=SYSCALL msg=audit(1707849600.123:456): arch=c00000b7 syscall=221 success=yes uid=0 exe="/usr/bin/chattr" key="clawav-tamper""#;
+        let event = parse_to_event(line, Some(&["1000".to_string()]));
+        assert!(event.is_some(), "tamper events must bypass user filter");
+    }
+
+    #[test]
+    fn test_non_tamper_event_no_false_positive() {
+        let line = r#"type=SYSCALL msg=audit(1707849600.123:456): arch=c00000b7 syscall=56 success=yes uid=1000 exe="/usr/bin/cat""#;
+        let event = parse_to_event(line, Some(&["1000".to_string()])).unwrap();
+        let tamper = check_tamper_event(&event);
+        assert!(tamper.is_none());
     }
 
     #[test]

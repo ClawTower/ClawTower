@@ -1162,6 +1162,122 @@ pub fn parse_disk_usage(output: &str) -> ScanResult {
 
 pub struct SecurityScanner;
 
+/// Check that immutable (chattr +i) flags are set on critical ClawAV files
+pub fn scan_immutable_flags() -> ScanResult {
+    let critical_files = [
+        "/usr/local/bin/clawav",
+        "/etc/clawav/config.toml",
+        "/etc/clawav/admin.key.hash",
+        "/etc/systemd/system/clawav.service",
+        "/etc/sudoers.d/clawav-deny",
+    ];
+
+    let mut missing = Vec::new();
+    let mut not_immutable = Vec::new();
+
+    for path in &critical_files {
+        if !std::path::Path::new(path).exists() {
+            // admin.key.hash may not exist yet on fresh install
+            if !path.contains("admin.key.hash") {
+                missing.push(*path);
+            }
+            continue;
+        }
+
+        match run_cmd("lsattr", &[path]) {
+            Ok(output) => {
+                // lsattr output: "----i---------e------- /path/to/file"
+                // The 'i' flag should be present in the attribute string
+                let attrs = output.split_whitespace().next().unwrap_or("");
+                if !attrs.contains('i') {
+                    not_immutable.push(*path);
+                }
+            }
+            Err(_) => {
+                // lsattr not available or failed — can't verify
+                not_immutable.push(*path);
+            }
+        }
+    }
+
+    if !missing.is_empty() {
+        ScanResult::new(
+            "immutable_flags",
+            ScanStatus::Fail,
+            &format!("Critical files MISSING: {}", missing.join(", ")),
+        )
+    } else if !not_immutable.is_empty() {
+        ScanResult::new(
+            "immutable_flags",
+            ScanStatus::Fail,
+            &format!(
+                "🚨 Immutable flag MISSING on: {} — possible tampering!",
+                not_immutable.join(", ")
+            ),
+        )
+    } else {
+        ScanResult::new(
+            "immutable_flags",
+            ScanStatus::Pass,
+            "All critical files have immutable flag set",
+        )
+    }
+}
+
+/// Parse lsattr output and check for immutable flag (testable helper)
+pub fn check_lsattr_immutable(lsattr_output: &str) -> bool {
+    let attrs = lsattr_output.split_whitespace().next().unwrap_or("");
+    attrs.contains('i')
+}
+
+/// Check that the AppArmor config protection profile is loaded and enforced
+pub fn scan_apparmor_protection() -> ScanResult {
+    // Check if AppArmor is available
+    match run_cmd("aa-enabled", &["--quiet"]) {
+        Ok(_) => {}
+        Err(_) => {
+            return ScanResult::new(
+                "apparmor_protection",
+                ScanStatus::Pass, // Not a failure — AppArmor is optional
+                "AppArmor not available (chattr +i and auditd provide primary protection)",
+            );
+        }
+    }
+
+    match run_cmd_with_sudo("aa-status", &[]) {
+        Ok(output) => {
+            let has_openclaw_profile = output.contains("openclaw")
+                || output.contains("clawav.deny-openclaw");
+            let has_protect_profile = output.contains("clawav.protect");
+
+            if has_openclaw_profile && has_protect_profile {
+                ScanResult::new(
+                    "apparmor_protection",
+                    ScanStatus::Pass,
+                    "AppArmor profiles loaded: openclaw restriction + config protection",
+                )
+            } else if has_openclaw_profile {
+                ScanResult::new(
+                    "apparmor_protection",
+                    ScanStatus::Warn,
+                    "AppArmor openclaw restriction loaded, but config protection profile missing",
+                )
+            } else {
+                ScanResult::new(
+                    "apparmor_protection",
+                    ScanStatus::Warn,
+                    "AppArmor profiles not loaded — run scripts/setup-apparmor.sh",
+                )
+            }
+        }
+        Err(e) => ScanResult::new(
+            "apparmor_protection",
+            ScanStatus::Warn,
+            &format!("Cannot check AppArmor status: {}", e),
+        ),
+    }
+}
+
 pub fn scan_secureclaw_sync() -> ScanResult {
     // Try configured path first, then common locations
     let candidates = [
@@ -1229,6 +1345,8 @@ impl SecurityScanner {
             scan_listening_services(),
             scan_resources(),
             scan_sidechannel_mitigations(),
+            scan_immutable_flags(),
+            scan_apparmor_protection(),
             scan_secureclaw_sync(),
             scan_cognitive_integrity(
                 std::path::Path::new("/home/openclaw/.openclaw/workspace"),
@@ -1502,6 +1620,21 @@ rules 0
         let r = ScanResult::new("test", ScanStatus::Fail, "broken");
         let alert = r.to_alert().unwrap();
         assert_eq!(alert.severity, Severity::Critical);
+    }
+
+    #[test]
+    fn test_lsattr_immutable_flag_present() {
+        assert!(check_lsattr_immutable("----i---------e------- /usr/local/bin/clawav"));
+    }
+
+    #[test]
+    fn test_lsattr_immutable_flag_missing() {
+        assert!(!check_lsattr_immutable("--------------e------- /usr/local/bin/clawav"));
+    }
+
+    #[test]
+    fn test_lsattr_empty_output() {
+        assert!(!check_lsattr_immutable(""));
     }
 
     #[test]

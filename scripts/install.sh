@@ -69,12 +69,50 @@ systemctl enable clawav
 
 # ── 4. Set immutable attributes ──────────────────────────────────────────────
 log "Setting immutable attributes (chattr +i)..."
-chattr +i /usr/local/bin/clawav
-chattr +i /etc/clawav/config.toml
-chattr +i /etc/systemd/system/clawav.service
+for f in /usr/local/bin/clawav /etc/clawav/config.toml /etc/systemd/system/clawav.service; do
+    if [[ -f "$f" ]]; then
+        chattr +i "$f" && log "  chattr +i $f — OK" || warn "  chattr +i $f — FAILED"
+    else
+        warn "  $f not found, skipping chattr"
+    fi
+done
+# admin.key.hash is set immutable after first run (when it's generated)
+if [[ -f /etc/clawav/admin.key.hash ]]; then
+    chattr +i /etc/clawav/admin.key.hash && log "  chattr +i /etc/clawav/admin.key.hash — OK" || warn "  chattr +i failed for admin.key.hash"
+fi
+
+# ── 4b. Auditd tamper-detection rules ────────────────────────────────────────
+log "Installing auditd tamper-detection rules..."
+if command -v auditctl &>/dev/null; then
+    # Watch chattr binary execution — detects attempts to remove immutable flags
+    auditctl -w /usr/bin/chattr -p x -k clawav-tamper 2>/dev/null \
+        && log "  audit rule: watch /usr/bin/chattr -p x -k clawav-tamper — OK" \
+        || warn "  audit rule for chattr failed (rules may be locked)"
+    # Watch for direct file access on /etc/clawav/
+    auditctl -w /etc/clawav/ -p wa -k clawav-config 2>/dev/null \
+        && log "  audit rule: watch /etc/clawav/ -p wa -k clawav-config — OK" \
+        || warn "  audit rule for /etc/clawav/ failed (rules may be locked)"
+    # Watch the binary itself
+    auditctl -w /usr/local/bin/clawav -p wa -k clawav-config 2>/dev/null \
+        && log "  audit rule: watch /usr/local/bin/clawav -p wa -k clawav-config — OK" \
+        || warn "  audit rule for binary failed (rules may be locked)"
+    # Watch the service file
+    auditctl -w /etc/systemd/system/clawav.service -p wa -k clawav-config 2>/dev/null \
+        && log "  audit rule: watch clawav.service -p wa -k clawav-config — OK" \
+        || warn "  audit rule for service file failed"
+else
+    warn "auditctl not available — skipping tamper-detection audit rules"
+fi
 
 # ── 5. AppArmor profile ──────────────────────────────────────────────────────
-log "Creating AppArmor profile..."
+log "Setting up AppArmor profiles..."
+if command -v aa-enabled &>/dev/null && aa-enabled --quiet 2>/dev/null; then
+    log "  AppArmor is enabled"
+elif command -v apparmor_parser &>/dev/null; then
+    log "  AppArmor parser found (kernel support may be missing — profiles installed for next boot)"
+else
+    log "  INFO: AppArmor not available on this system — skipping AppArmor setup entirely"
+fi
 if command -v apparmor_parser &>/dev/null; then
     cat > /etc/apparmor.d/clawav.deny-openclaw <<'APPARMOR'
 # AppArmor profile: deny openclaw user access to ClawAV paths
@@ -94,9 +132,17 @@ profile clawav.deny-openclaw {
   /** rwxmlk,
 }
 APPARMOR
-    apparmor_parser -r /etc/apparmor.d/clawav.deny-openclaw 2>/dev/null || warn "AppArmor profile load failed (may need reboot)"
-else
-    warn "AppArmor not available — skipping profile"
+    apparmor_parser -r /etc/apparmor.d/clawav.deny-openclaw 2>/dev/null \
+        && log "  AppArmor profile clawav.deny-openclaw loaded" \
+        || warn "  AppArmor profile load failed (non-fatal — may need reboot)"
+    # Load config protection profile if available
+    PROTECT_PROFILE_SRC="$(dirname "$SCRIPT_PATH")/../apparmor/etc.clawav.protect"
+    if [[ -f "$PROTECT_PROFILE_SRC" ]]; then
+        cp "$PROTECT_PROFILE_SRC" /etc/apparmor.d/etc.clawav.protect
+        apparmor_parser -r /etc/apparmor.d/etc.clawav.protect 2>/dev/null \
+            && log "  AppArmor profile etc.clawav.protect loaded" \
+            || warn "  AppArmor config protection profile load failed (non-fatal)"
+    fi
 fi
 
 # ── 6. Drop capabilities from openclaw user ──────────────────────────────────
@@ -120,12 +166,25 @@ fi
 
 # ── 7. Kernel hardening via sysctl ───────────────────────────────────────────
 log "Setting kernel hardening parameters..."
-cat > /etc/sysctl.d/99-clawav.conf <<'SYSCTL'
+
+# ptrace_scope: configurable — only set if not already configured or less restrictive
+DESIRED_PTRACE=${CLAWAV_PTRACE_SCOPE:-2}
+CURRENT_PTRACE=$(cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null || echo "0")
+log "  ptrace_scope: current=$CURRENT_PTRACE desired=$DESIRED_PTRACE"
+if [[ "$CURRENT_PTRACE" -ge "$DESIRED_PTRACE" ]]; then
+    log "  ptrace_scope already at $CURRENT_PTRACE (>= $DESIRED_PTRACE), keeping current value"
+    PTRACE_VALUE="$CURRENT_PTRACE"
+else
+    log "  ptrace_scope $CURRENT_PTRACE < $DESIRED_PTRACE, hardening to $DESIRED_PTRACE"
+    PTRACE_VALUE="$DESIRED_PTRACE"
+fi
+
+cat > /etc/sysctl.d/99-clawav.conf <<SYSCTL
 # ClawAV kernel hardening
 kernel.modules_disabled = 1
-kernel.yama.ptrace_scope = 2
+kernel.yama.ptrace_scope = ${PTRACE_VALUE}
 SYSCTL
-sysctl -p /etc/sysctl.d/99-clawav.conf 2>/dev/null || warn "Some sysctl params may need reboot"
+sysctl -p /etc/sysctl.d/99-clawav.conf 2>/dev/null && log "  sysctl params applied" || warn "Some sysctl params may need reboot"
 
 # ── 8. Restricted sudoers ────────────────────────────────────────────────────
 log "Installing sudoers restrictions..."
