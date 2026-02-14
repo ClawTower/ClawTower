@@ -167,7 +167,12 @@ pub async fn run_aggregator(
     let mut cleanup_counter: u32 = 0;
 
     // Initialize audit chain
-    let mut audit_chain = match crate::audit_chain::AuditChain::new("/var/log/clawav/audit.chain") {
+    let chain_path = if unsafe { libc::getuid() } == 0 {
+        "/var/log/clawav/audit.chain".to_string()
+    } else {
+        format!("/tmp/clawav-{}/audit.chain", unsafe { libc::getuid() })
+    };
+    let mut audit_chain = match crate::audit_chain::AuditChain::new(&chain_path) {
         Ok(chain) => Some(chain),
         Err(e) => {
             eprintln!("Warning: Failed to initialize audit chain: {}. Continuing without it.", e);

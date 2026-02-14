@@ -59,10 +59,16 @@ impl AuditChain {
                 if line.is_empty() {
                     continue;
                 }
-                let entry: AuditEntry = serde_json::from_str(line)
-                    .context("Failed to parse audit chain entry")?;
-                last_seq = entry.seq;
-                last_hash = entry.hash;
+                match serde_json::from_str::<AuditEntry>(line) {
+                    Ok(entry) => {
+                        last_seq = entry.seq;
+                        last_hash = entry.hash;
+                    }
+                    Err(_) => {
+                        // Skip malformed entries — chain may have been truncated or corrupted
+                        continue;
+                    }
+                }
             }
             (last_seq, last_hash)
         } else {
