@@ -1,5 +1,5 @@
 use crate::alerts::{Alert, Severity};
-use crate::config::{DlpPattern, KeyMapping, ProxyConfig};
+use crate::config::{KeyMapping, ProxyConfig};
 use anyhow::Result;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Client, Request, Response, Server, StatusCode, Uri};
@@ -14,7 +14,7 @@ struct ProxyState {
     alert_tx: mpsc::Sender<Alert>,
 }
 
-struct CompiledDlpPattern {
+pub(crate) struct CompiledDlpPattern {
     name: String,
     regex: Regex,
     action: String,
@@ -257,7 +257,7 @@ fn hyper_tls_connector() -> hyper::client::HttpConnector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{KeyMapping, DlpPattern};
+    use crate::config::KeyMapping;
 
     fn test_mappings() -> Vec<KeyMapping> {
         vec![

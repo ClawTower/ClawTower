@@ -169,7 +169,6 @@ pub fn run_verify_audit(path: Option<&str>) -> Result<()> {
 mod tests {
     use super::*;
     use crate::alerts::{Alert, Severity};
-    use std::io::Write;
     use tempfile::NamedTempFile;
 
     fn test_alert(sev: Severity, source: &str, msg: &str) -> Alert {

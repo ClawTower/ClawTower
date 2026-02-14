@@ -44,6 +44,7 @@ COMMANDS:
     configure            Interactive configuration wizard
     update               Self-update to latest GitHub release
     scan                 Run a one-shot security scan and exit
+    verify-key           Verify admin key from stdin (or --key flag)
     verify-audit [PATH]  Verify audit chain integrity
     setup                Install ClawAV as a system service
     setup --source       Build from source + install
@@ -136,6 +137,35 @@ async fn main() -> Result<()> {
         "version" | "--version" | "-V" => {
             print_version();
             return Ok(());
+        }
+        "verify-key" => {
+            // Read key from --key flag or stdin
+            let key = if let Some(pos) = rest_args.iter().position(|a| a == "--key") {
+                rest_args.get(pos + 1).cloned().unwrap_or_default()
+            } else {
+                // Read from stdin
+                let mut key = String::new();
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut key)
+                    .unwrap_or_default();
+                key.trim().to_string()
+            };
+            if key.is_empty() {
+                eprintln!("No key provided");
+                std::process::exit(1);
+            }
+            let hash_path = std::path::Path::new("/etc/clawav/admin.key.hash");
+            let hash = match std::fs::read_to_string(hash_path) {
+                Ok(h) => h.trim().to_string(),
+                Err(e) => {
+                    eprintln!("Cannot read {}: {}", hash_path.display(), e);
+                    std::process::exit(1);
+                }
+            };
+            if admin::verify_key(&key, &hash) {
+                std::process::exit(0);
+            } else {
+                std::process::exit(1);
+            }
         }
         "verify-audit" => {
             let path = args.get(2).map(|s| s.as_str());

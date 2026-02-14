@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+
 use chrono::Local;
 use serde::Deserialize;
 
@@ -68,6 +68,7 @@ struct ConfigFile {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct SlackSection {
     #[serde(default)]
     webhook_url: String,

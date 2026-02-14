@@ -90,55 +90,29 @@ if ! $FORCE; then
         # Prompt for key if not provided
         if [[ -z "$ADMIN_KEY" ]]; then
             echo -e "${CYAN}Enter your ClawAV admin key:${NC}"
-            read -rsp "> " ADMIN_KEY
+            read -rs -p "> " ADMIN_KEY
             echo ""
         fi
 
         [[ -n "$ADMIN_KEY" ]] || die "No admin key provided"
 
-        # Verify using the same Argon2 method as ClawAV
-        # We need to check the key against the stored hash
-        # Use Python since argon2 verification in bash is tricky
-        STORED_HASH=$(cat "$KEY_HASH_PATH")
+        # Verify using clawav verify-key
+        CLAWAV_BIN="/usr/local/bin/clawav"
+        if [[ ! -x "$CLAWAV_BIN" ]]; then
+            # Try to find it in common locations
+            for candidate in ./target/release/clawav /home/openclaw/.openclaw/workspace/openclawav/target/release/clawav; do
+                if [[ -x "$candidate" ]]; then
+                    CLAWAV_BIN="$candidate"
+                    break
+                fi
+            done
+        fi
 
-        # Try python3 with argon2-cffi or passlib
-        VERIFY_RESULT=$(python3 -c "
-import sys
-try:
-    from argon2 import PasswordHasher
-    ph = PasswordHasher()
-    try:
-        ph.verify('${STORED_HASH}', '${ADMIN_KEY}')
-        print('OK')
-    except:
-        print('FAIL')
-except ImportError:
-    try:
-        from passlib.hash import argon2
-        if argon2.verify('${ADMIN_KEY}', '${STORED_HASH}'):
-            print('OK')
-        else:
-            print('FAIL')
-    except ImportError:
-        print('SKIP')
-" 2>/dev/null || echo "SKIP")
-
-        case "$VERIFY_RESULT" in
-            OK)
-                log "✅ Admin key verified"
-                ;;
-            FAIL)
-                die "❌ Invalid admin key. Uninstall denied."
-                ;;
-            SKIP)
-                warn "Cannot verify key (no python3 argon2 library)"
-                warn "Falling back to manual confirmation"
-                echo ""
-                echo -e "${YELLOW}Without argon2 verification, please confirm you have the correct key.${NC}"
-                read -rp "Type 'UNINSTALL' to proceed: " confirm
-                [[ "$confirm" == "UNINSTALL" ]] || exit 0
-                ;;
-        esac
+        if echo "$ADMIN_KEY" | "$CLAWAV_BIN" verify-key 2>/dev/null; then
+            log "✅ Admin key verified"
+        else
+            die "❌ Invalid admin key. Uninstall denied."
+        fi
     fi
 else
     warn "⚠️  --force mode: skipping key verification"

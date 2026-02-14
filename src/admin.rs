@@ -37,6 +37,7 @@ pub struct AdminResponse {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct RateLimiter {
     failures: HashMap<String, (u32, Instant)>,
     global_failures: u32,
@@ -162,6 +163,7 @@ impl AdminSocket {
     }
 
     /// Check if monitoring is currently paused
+    #[allow(dead_code)]
     pub fn paused_until(&self) -> Arc<Mutex<Option<Instant>>> {
         self.paused_until.clone()
     }

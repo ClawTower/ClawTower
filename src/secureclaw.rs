@@ -43,6 +43,7 @@ pub struct CompiledPattern {
 
 /// Result of checking text against patterns
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct PatternMatch {
     pub database: String,     // which DB matched
     pub category: String,
@@ -313,6 +314,7 @@ impl SecureClawEngine {
     }
 
     /// Check text against all patterns
+    #[allow(dead_code)]
     pub fn check_text(&self, text: &str) -> Vec<PatternMatch> {
         let mut matches = Vec::new();
 
@@ -591,6 +593,7 @@ impl SecureClawEngine {
     }
 
     /// Check privacy rules only
+    #[allow(dead_code)]
     pub fn check_privacy(&self, text: &str) -> Vec<PatternMatch> {
         let mut matches = Vec::new();
 

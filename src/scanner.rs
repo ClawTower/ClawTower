@@ -304,8 +304,8 @@ pub fn scan_password_policy() -> ScanResult {
     // Check /etc/login.defs
     if let Ok(content) = std::fs::read_to_string("/etc/login.defs") {
         let mut pass_max_days = None;
-        let mut pass_min_days = None;
-        let mut pass_warn_age = None;
+        let mut _pass_min_days = None;
+        let mut _pass_warn_age = None;
         
         for line in content.lines() {
             if line.starts_with("PASS_MAX_DAYS") {
@@ -320,13 +320,13 @@ pub fn scan_password_policy() -> ScanResult {
             } else if line.starts_with("PASS_MIN_DAYS") {
                 if let Some(value) = line.split_whitespace().nth(1) {
                     if let Ok(days) = value.parse::<u32>() {
-                        pass_min_days = Some(days);
+                        _pass_min_days = Some(days);
                     }
                 }
             } else if line.starts_with("PASS_WARN_AGE") {
                 if let Some(value) = line.split_whitespace().nth(1) {
                     if let Ok(days) = value.parse::<u32>() {
-                        pass_warn_age = Some(days);
+                        _pass_warn_age = Some(days);
                     }
                 }
             }
@@ -1225,6 +1225,7 @@ pub fn scan_immutable_flags() -> ScanResult {
 }
 
 /// Parse lsattr output and check for immutable flag (testable helper)
+#[allow(dead_code)]
 pub fn check_lsattr_immutable(lsattr_output: &str) -> bool {
     let attrs = lsattr_output.split_whitespace().next().unwrap_or("");
     attrs.contains('i')

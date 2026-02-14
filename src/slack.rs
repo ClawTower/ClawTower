@@ -43,6 +43,7 @@ impl SlackNotifier {
     }
 
     /// Test the webhook connection by sending a test message.
+    #[allow(dead_code)]
     pub async fn test_connection(&self) -> Result<()> {
         if !self.enabled {
             anyhow::bail!("Slack notifications not enabled or webhook URL is empty");

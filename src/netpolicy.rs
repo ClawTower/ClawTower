@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use crate::alerts::{Alert, Severity};
 use crate::config::NetPolicyConfig;
 
+#[allow(dead_code)]
 pub struct NetPolicy {
     allowed_hosts: HashSet<String>,
     allowed_ports: HashSet<u16>,
@@ -11,6 +12,7 @@ pub struct NetPolicy {
 }
 
 impl NetPolicy {
+    #[allow(dead_code)]
     pub fn from_config(config: &NetPolicyConfig) -> Self {
         Self {
             allowed_hosts: config.allowed_hosts.iter().cloned().collect(),
@@ -22,6 +24,7 @@ impl NetPolicy {
 
     /// Check if a connection to host:port is allowed
     /// Returns None if allowed, Some(Alert) if blocked
+    #[allow(dead_code)]
     pub fn check_connection(&self, host: &str, port: u16) -> Option<Alert> {
         match self.mode.as_str() {
             "allowlist" => {
@@ -82,6 +85,7 @@ impl NetPolicy {
     }
 
     /// Check a command for embedded URLs/hosts and validate against policy
+    #[allow(dead_code)]
     pub fn check_command(&self, cmd: &str) -> Vec<Alert> {
         let mut alerts = Vec::new();
         
@@ -100,6 +104,7 @@ impl NetPolicy {
 }
 
 /// Extract hostname from a URL-like string
+#[allow(dead_code)]
 fn extract_host_from_url(s: &str) -> Option<String> {
     let s = s.trim_matches(|c: char| c == '"' || c == '\'' || c == '`');
     
@@ -117,6 +122,7 @@ fn extract_host_from_url(s: &str) -> Option<String> {
 }
 
 /// Extract port from a URL-like string
+#[allow(dead_code)]
 fn extract_port_from_url(s: &str) -> Option<u16> {
     let s = s.trim_matches(|c: char| c == '"' || c == '\'' || c == '`');
     if let Some(rest) = s.strip_prefix("http://").or_else(|| s.strip_prefix("https://")) {

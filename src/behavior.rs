@@ -11,6 +11,7 @@ pub enum BehaviorCategory {
     SecurityTamper,
     Reconnaissance,
     SideChannel,
+    #[allow(dead_code)]
     SecureClawMatch,
 }
 

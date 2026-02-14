@@ -108,6 +108,7 @@ impl CognitiveBaseline {
     }
 
     /// Update baselines to current state
+    #[allow(dead_code)]
     pub fn rebaseline(&mut self) {
         self.baselines.clear();
         for filename in COGNITIVE_FILES {

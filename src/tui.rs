@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use crate::alerts::{Alert, AlertStore, Severity};
 use crate::config::Config;
 
+#[allow(dead_code)]
 pub enum TuiEvent {
     Alert(Alert),
     Tick,
@@ -23,6 +24,7 @@ pub enum TuiEvent {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct ConfigField {
     pub name: String,
     pub value: String,

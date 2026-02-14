@@ -1,5 +1,4 @@
 use anyhow::Result;
-use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::fs::File;
 use std::path::Path;
@@ -7,7 +6,6 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::alerts::{Alert, Severity};
-use crate::behavior::BehaviorCategory;
 
 /// Parsed representation of an audit event (may combine SYSCALL + EXECVE records)
 #[derive(Debug, Clone)]
@@ -263,12 +261,14 @@ pub fn event_to_alert(event: &ParsedEvent) -> Alert {
 }
 
 /// Legacy parse function — now wraps parse_to_event + event_to_alert
+#[allow(dead_code)]
 pub fn parse_audit_line(line: &str, watched_users: Option<&[String]>) -> Option<Alert> {
     let event = parse_to_event(line, watched_users)?;
     Some(event_to_alert(&event))
 }
 
 /// Tail the audit log file and send alerts
+#[allow(dead_code)]
 pub async fn tail_audit_log(
     path: &Path,
     watched_users: Option<Vec<String>>,
@@ -308,6 +308,7 @@ pub async fn tail_audit_log(
 }
 
 /// Tail audit log with behavior detection — sends both alerts and parsed events
+#[allow(dead_code)]
 pub async fn tail_audit_log_with_behavior(
     path: &Path,
     watched_users: Option<Vec<String>>,
