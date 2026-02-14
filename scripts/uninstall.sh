@@ -3,11 +3,12 @@
 #
 # Reverses the "swallowed key" hardening from install.sh.
 # Requires the admin key that was displayed on first run.
+# Do NOT run with sudo — the script handles privilege escalation internally.
 #
 # Usage:
-#   sudo bash scripts/uninstall.sh
-#   sudo bash scripts/uninstall.sh --key <admin-key>
-#   sudo bash scripts/uninstall.sh --force   (skip key check — emergency only)
+#   bash scripts/uninstall.sh
+#   bash scripts/uninstall.sh --key <admin-key>
+#   bash scripts/uninstall.sh --force   (skip key check — emergency only)
 #
 set -euo pipefail
 
@@ -38,7 +39,7 @@ for arg in "$@"; do
             # Next arg is the key (handled below)
             ;;
         --help|-h)
-            echo "Usage: sudo bash uninstall.sh [OPTIONS]"
+            echo "Usage: bash uninstall.sh [OPTIONS]"
             echo ""
             echo "  --key <key>    Provide admin key (or will be prompted)"
             echo "  --keep-data    Keep logs and audit chain"
@@ -46,7 +47,7 @@ for arg in "$@"; do
             echo ""
             exit 0
             ;;
-        clawav_admin_*)
+        OCAV-*|clawav_admin_*)
             ADMIN_KEY="$arg"
             ;;
     esac
@@ -65,7 +66,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ $EUID -eq 0 ]] || die "Must run as root"
+# Don't require root upfront — we verify the key as the normal user,
+# then use sudo internally for privileged operations.
+if [[ $EUID -eq 0 ]]; then
+    warn "Running as root. Key verification works best as your normal user."
+    warn "Consider running without sudo: bash scripts/uninstall.sh"
+fi
 
 echo ""
 echo -e "${RED}╔══════════════════════════════════════════════════════════════╗${NC}"
@@ -122,88 +128,90 @@ fi
 
 echo ""
 log "Starting uninstall..."
+log "Sudo access is required for privileged operations — you may be prompted."
+echo ""
 
 # ── 1. Stop the service ──────────────────────────────────────────────────────
 log "Stopping ClawAV service..."
-systemctl stop clawav 2>/dev/null || true
-systemctl disable clawav 2>/dev/null || true
+sudo systemctl stop clawav 2>/dev/null || true
+sudo systemctl disable clawav 2>/dev/null || true
 
 # ── 2. Remove immutable attributes ───────────────────────────────────────────
 log "Removing immutable attributes..."
-chattr -i /usr/local/bin/clawav 2>/dev/null || true
-chattr -i /etc/clawav/config.toml 2>/dev/null || true
-chattr -i /etc/systemd/system/clawav.service 2>/dev/null || true
-chattr -i /etc/sudoers.d/clawav-deny 2>/dev/null || true
+sudo chattr -i /usr/local/bin/clawav 2>/dev/null || true
+sudo chattr -i /etc/clawav/config.toml 2>/dev/null || true
+sudo chattr -i /etc/systemd/system/clawav.service 2>/dev/null || true
+sudo chattr -i /etc/sudoers.d/clawav-deny 2>/dev/null || true
 
 # ── 3. Remove AppArmor profile ───────────────────────────────────────────────
 log "Removing AppArmor profile..."
 if command -v apparmor_parser &>/dev/null; then
-    apparmor_parser -R /etc/apparmor.d/clawav.deny-openclaw 2>/dev/null || true
-    rm -f /etc/apparmor.d/clawav.deny-openclaw
+    sudo apparmor_parser -R /etc/apparmor.d/clawav.deny-openclaw 2>/dev/null || true
+    sudo rm -f /etc/apparmor.d/clawav.deny-openclaw
 fi
 
 # ── 4. Remove sudoers restrictions ───────────────────────────────────────────
 log "Removing sudoers restrictions..."
-rm -f /etc/sudoers.d/clawav-deny
+sudo rm -f /etc/sudoers.d/clawav-deny
 
 # ── 5. Remove kernel hardening ───────────────────────────────────────────────
 log "Removing kernel hardening sysctl..."
-rm -f /etc/sysctl.d/99-clawav.conf
+sudo rm -f /etc/sysctl.d/99-clawav.conf
 # Restore default ptrace scope
-sysctl -w kernel.yama.ptrace_scope=1 2>/dev/null || true
+sudo sysctl -w kernel.yama.ptrace_scope=1 2>/dev/null || true
 # Note: kernel.modules_disabled=1 cannot be undone without reboot
 warn "kernel.modules_disabled may still be active — reboot to restore module loading"
 
 # ── 6. Remove capability restrictions ────────────────────────────────────────
 log "Removing capability restrictions..."
 if [[ -f /etc/security/capability.conf ]]; then
-    sed -i '/clawav\|openclaw.*cap_linux_immutable\|openclaw.*cap_sys_ptrace\|openclaw.*cap_sys_module/d' /etc/security/capability.conf 2>/dev/null || true
+    sudo sed -i '/clawav\|openclaw.*cap_linux_immutable\|openclaw.*cap_sys_ptrace\|openclaw.*cap_sys_module/d' /etc/security/capability.conf 2>/dev/null || true
 fi
 # Remove pam_cap line we added
-sed -i '/pam_cap.so.*# ClawAV/d' /etc/pam.d/common-auth 2>/dev/null || true
+sudo sed -i '/pam_cap.so.*# ClawAV/d' /etc/pam.d/common-auth 2>/dev/null || true
 
 # ── 7. Remove LD_PRELOAD guard ───────────────────────────────────────────────
 log "Removing LD_PRELOAD guard..."
-rm -f /usr/local/lib/libclawguard.so
+sudo rm -f /usr/local/lib/libclawguard.so
 if [[ -f /etc/ld.so.preload ]]; then
-    sed -i '/libclawguard/d' /etc/ld.so.preload
+    sudo sed -i '/libclawguard/d' /etc/ld.so.preload
     # Remove file if empty
-    [[ -s /etc/ld.so.preload ]] || rm -f /etc/ld.so.preload
+    [[ -s /etc/ld.so.preload ]] || sudo rm -f /etc/ld.so.preload
 fi
 
 # ── 8. Remove systemd service ────────────────────────────────────────────────
 log "Removing systemd service..."
-rm -f /etc/systemd/system/clawav.service
-systemctl daemon-reload
+sudo rm -f /etc/systemd/system/clawav.service
+sudo systemctl daemon-reload
 
 # ── 9. Remove binaries ───────────────────────────────────────────────────────
 log "Removing binaries..."
-rm -f /usr/local/bin/clawav
-rm -f /usr/local/bin/clawsudo
+sudo rm -f /usr/local/bin/clawav
+sudo rm -f /usr/local/bin/clawsudo
 
 # ── 10. Remove config ────────────────────────────────────────────────────────
 log "Removing configuration..."
-rm -rf /etc/clawav
+sudo rm -rf /etc/clawav
 
 # ── 11. Remove data (unless --keep-data) ─────────────────────────────────────
 if $KEEP_DATA; then
     info "Keeping logs and audit data at /var/log/clawav/"
 else
     log "Removing logs and audit data..."
-    rm -rf /var/log/clawav
+    sudo rm -rf /var/log/clawav
 fi
-rm -rf /var/run/clawav
+sudo rm -rf /var/run/clawav
 
 # ── 12. Remove clawav system user ────────────────────────────────────────────
 if id -u clawav &>/dev/null; then
     log "Removing clawav system user..."
-    userdel clawav 2>/dev/null || true
+    sudo userdel clawav 2>/dev/null || true
 fi
 
 # ── 13. Unlock audit rules ───────────────────────────────────────────────────
 if command -v auditctl &>/dev/null; then
     log "Unlocking audit rules..."
-    auditctl -e 1 2>/dev/null || warn "Audit rules locked — will unlock on reboot"
+    sudo auditctl -e 1 2>/dev/null || warn "Audit rules locked — will unlock on reboot"
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
