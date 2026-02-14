@@ -332,9 +332,17 @@ pub fn parse_disk_usage(output: &str) -> ScanResult {
 pub struct SecurityScanner;
 
 pub fn scan_secureclaw_sync() -> ScanResult {
-    let vendor_path = "vendor/secureclaw";
+    // Try configured path first, then common locations
+    let candidates = [
+        "/home/openclaw/.openclaw/workspace/openclawav/vendor/secureclaw",
+        "vendor/secureclaw",
+        "/opt/clawav/vendor/secureclaw",
+    ];
+    let vendor_path = candidates.iter()
+        .find(|p| std::path::Path::new(p).exists())
+        .copied()
+        .unwrap_or("vendor/secureclaw");
     
-    // Check if vendor/secureclaw directory exists
     if !std::path::Path::new(vendor_path).exists() {
         return ScanResult::new("secureclaw", ScanStatus::Fail, "SecureClaw submodule missing - run 'git submodule update --init'");
     }
