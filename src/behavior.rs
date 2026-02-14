@@ -133,6 +133,23 @@ const PERSISTENCE_WRITE_PATHS: &[&str] = &[
     "/etc/ld.so.preload",
 ];
 
+/// Patterns that indicate LD_PRELOAD bypass attempts
+const PRELOAD_BYPASS_PATTERNS: &[&str] = &[
+    "ld.so.preload",
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "ld-linux",
+    "/lib/ld-",
+];
+
+/// Tools commonly used to compile static binaries or bypass dynamic linking
+const STATIC_COMPILE_PATTERNS: &[&str] = &[
+    "-static",
+    "-static-libgcc",
+    "musl-gcc",
+    "musl-cc",
+];
+
 /// Classify a parsed audit event against known attack patterns.
 /// Returns Some((category, severity)) if the event matches a rule, None otherwise.
 pub fn classify_behavior(event: &ParsedEvent) -> Option<(BehaviorCategory, Severity)> {
@@ -176,6 +193,36 @@ pub fn classify_behavior(event: &ParsedEvent) -> Option<(BehaviorCategory, Sever
                     return Some((BehaviorCategory::PrivilegeEscalation, Severity::Critical));
                 }
             }
+        }
+
+        // --- CRITICAL: LD_PRELOAD bypass attempts ---
+        if let Some(ref cmd) = event.command {
+            // Direct manipulation of preload config
+            for pattern in PRELOAD_BYPASS_PATTERNS {
+                if cmd.contains(pattern) {
+                    // Don't flag our own legitimate preload operations
+                    if !cmd.contains("openclawav") && !cmd.contains("clawguard") {
+                        return Some((BehaviorCategory::SecurityTamper, Severity::Critical));
+                    }
+                }
+            }
+            
+            // Compiling static binaries to bypass dynamic linking
+            for pattern in STATIC_COMPILE_PATTERNS {
+                if cmd.contains(pattern) {
+                    return Some((BehaviorCategory::SecurityTamper, Severity::Warning));
+                }
+            }
+        }
+
+        // Direct invocation of the dynamic linker (bypass LD_PRELOAD)
+        if binary == "ld-linux-aarch64.so.1" || binary == "ld-linux-x86-64.so.2" || binary.starts_with("ld-linux") || binary == "ld.so" {
+            return Some((BehaviorCategory::SecurityTamper, Severity::Critical));
+        }
+
+        // ptrace can be used to bypass LD_PRELOAD by injecting code directly
+        if ["strace", "ltrace", "gdb", "lldb", "ptrace"].contains(&binary) {
+            return Some((BehaviorCategory::SecurityTamper, Severity::Critical));
         }
 
         // --- CRITICAL: Data Exfiltration via network tools ---
@@ -273,6 +320,15 @@ pub fn classify_behavior(event: &ParsedEvent) -> Option<(BehaviorCategory, Sever
         if binary == "base64" {
             // base64 encoding of files is suspicious
             return Some((BehaviorCategory::DataExfiltration, Severity::Warning));
+        }
+
+        // --- CRITICAL: Memory/environ dumping tools ---
+        if ["strings", "xxd", "od"].contains(&binary) {
+            for arg in args.iter().skip(1) {
+                if arg.contains("/proc/") && (arg.contains("/environ") || arg.contains("/mem") || arg.contains("/maps")) {
+                    return Some((BehaviorCategory::DataExfiltration, Severity::Critical));
+                }
+            }
         }
     }
 
