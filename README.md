@@ -16,10 +16,45 @@ curl -sSL https://raw.githubusercontent.com/coltz108/ClawAV/main/scripts/oneshot
 
 Supports **x86_64** and **aarch64** (Raspberry Pi, ARM servers). Downloads pre-built binaries from [GitHub Releases](https://github.com/coltz108/ClawAV/releases).
 
-After install:
-1. Edit config: `nano /etc/clawav/config.toml`
-2. Set `watched_user` and `slack_webhook_url`
-3. Start: `systemctl start clawav`
+After install, configure ClawAV before starting the service:
+
+```bash
+sudo nano /etc/clawav/config.toml
+```
+
+```toml
+[general]
+watched_user = "1000"              # UID to monitor (run `id <username>` to find it)
+watched_users = ["1000", "1001"]   # Monitor multiple users
+watch_all_users = false            # Monitor ALL users
+
+[slack]
+webhook_url = "https://hooks.slack.com/..."    # REQUIRED — independent alert channel
+backup_webhook_url = "https://hooks.slack.com/..."
+channel = "#devops"
+min_slack_level = "warning"
+
+[auditd]
+enabled = true
+
+[api]
+enabled = true
+port = 18791
+
+[secureclaw]
+enabled = false
+
+[policy]
+enabled = true
+dir = "./policies"
+```
+
+See `config.toml` in the repo for all options. Then start the service:
+
+```bash
+sudo systemctl start clawav
+sudo journalctl -u clawav -f   # watch logs
+```
 
 ## Why
 
@@ -164,37 +199,6 @@ Unix socket at `/var/run/clawav/admin.sock` with Argon2-hashed key auth:
 - `pause` — Pause monitoring (max 30 min, auto-resume)
 
 3 failed auth attempts = 1 hour lockout + CRITICAL Slack alert.
-
-## Configuration
-
-```toml
-[general]
-watched_user = "1000"              # UID to monitor
-watched_users = ["1000", "1001"]   # Monitor multiple users
-watch_all_users = false            # Monitor ALL users
-
-[slack]
-webhook_url = "https://hooks.slack.com/..."
-backup_webhook_url = "https://hooks.slack.com/..."
-channel = "#devops"
-min_slack_level = "warning"
-
-[auditd]
-enabled = true
-
-[api]
-enabled = true
-port = 18791
-
-[secureclaw]
-enabled = false
-
-[policy]
-enabled = true
-dir = "./policies"
-```
-
-See `config.toml` for all options.
 
 ## Build from Source
 
