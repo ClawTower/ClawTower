@@ -192,7 +192,7 @@ async fn main() -> Result<()> {
             eprintln!("Score: {}/{} checks passed", pass_count, total);
             return Ok(());
         }
-        "run" | _ => {
+        "run" | "tui" | _ => {
             // Fall through to normal watchdog startup
         }
     }
@@ -212,6 +212,28 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| PathBuf::from("/etc/clawav/config.toml"));
 
     let headless = run_args.iter().any(|a| a.as_str() == "--headless");
+
+    // If running in TUI mode, stop the background service to avoid port/socket conflicts
+    if !headless {
+        let service_was_running = std::process::Command::new("systemctl")
+            .args(["is-active", "--quiet", "clawav"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if service_was_running {
+            eprintln!("Stopping clawav service for TUI mode...");
+            let _ = std::process::Command::new("sudo")
+                .args(["systemctl", "stop", "clawav"])
+                .status();
+            // Brief pause for sockets to release
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        // Re-start on exit via drop guard
+        if service_was_running {
+            // We'll restart in the cleanup section after TUI exits
+            std::env::set_var("CLAWAV_RESTART_SERVICE", "1");
+        }
+    }
 
     let config = Config::load(&config_path)?;
     let notifier = SlackNotifier::new(&config.slack);
@@ -445,6 +467,14 @@ async fn main() -> Result<()> {
     } else {
         // Run TUI (blocks until quit)
         tui::run_tui(alert_rx, Some(config_path.clone())).await?;
+    }
+
+    // Restart the background service if we stopped it for TUI mode
+    if std::env::var("CLAWAV_RESTART_SERVICE").is_ok() {
+        eprintln!("Restarting clawav service...");
+        let _ = std::process::Command::new("sudo")
+            .args(["systemctl", "start", "clawav"])
+            .status();
     }
 
     Ok(())
