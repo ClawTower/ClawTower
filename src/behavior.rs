@@ -883,3 +883,4 @@ mod tests {
         assert_eq!(result, Some((BehaviorCategory::SecurityTamper, Severity::Warning)));
     }
 }
+
