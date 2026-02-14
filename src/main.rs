@@ -75,7 +75,7 @@ CONFIG:
 fn print_version() {
     eprintln!("ClawAV v{}", env!("CARGO_PKG_VERSION"));
     eprintln!("Tamper-proof security watchdog for AI agents");
-    eprintln!("https://github.com/coltzclaw/ClawAV");
+    eprintln!("https://github.com/coltz108/ClawAV");
 }
 
 /// Find the scripts directory relative to the binary or fallback locations
