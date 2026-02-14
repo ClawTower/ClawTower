@@ -55,6 +55,21 @@ pub struct App {
     pub config_editing: bool,
     pub config_edit_buffer: String,
     pub config_saved_message: Option<String>,
+    // Sudo popup state
+    pub sudo_popup: Option<SudoPopup>,
+}
+
+pub struct SudoPopup {
+    pub action: String,        // action to run after auth
+    pub password: String,      // password being typed
+    pub message: String,       // what we're about to do
+    pub status: SudoStatus,
+}
+
+pub enum SudoStatus {
+    WaitingForPassword,
+    Running,
+    Failed(String),
 }
 
 impl App {
@@ -84,6 +99,7 @@ impl App {
             config_editing: false,
             config_edit_buffer: String::new(),
             config_saved_message: None,
+            sudo_popup: None,
         }
     }
 
@@ -107,6 +123,33 @@ impl App {
     }
 
     pub fn on_key(&mut self, key: KeyCode, modifiers: KeyModifiers) {
+        // Handle sudo popup if active
+        if let Some(ref mut popup) = self.sudo_popup {
+            match &popup.status {
+                SudoStatus::WaitingForPassword => {
+                    match key {
+                        KeyCode::Esc => { self.sudo_popup = None; return; }
+                        KeyCode::Enter => {
+                            let password = popup.password.clone();
+                            let action = popup.action.clone();
+                            popup.status = SudoStatus::Running;
+                            self.run_sudo_action(&action, &password);
+                            return;
+                        }
+                        KeyCode::Backspace => { popup.password.pop(); return; }
+                        KeyCode::Char(c) => { popup.password.push(c); return; }
+                        _ => return,
+                    }
+                }
+                SudoStatus::Running => return,
+                SudoStatus::Failed(_) => {
+                    // Any key dismisses
+                    self.sudo_popup = None;
+                    return;
+                }
+            }
+        }
+
         // Clear saved message on any keypress
         if self.config_saved_message.is_some() {
             self.config_saved_message = None;
@@ -238,25 +281,74 @@ impl App {
     }
 
     fn run_action(&mut self, action: &str) {
-        let (cmd, args): (&str, &[&str]) = match action {
-            "install_falco" => {
-                self.config_saved_message = Some("Installing Falco... (this may take a moment)".to_string());
-                ("bash", &["-c", "apt-get update -qq && apt-get install -y -qq falco 2>&1 || dnf install -y falco 2>&1 || echo 'INSTALL_FAILED'"] as &[&str])
-            }
-            "install_samhain" => {
-                self.config_saved_message = Some("Installing Samhain... (this may take a moment)".to_string());
-                ("bash", &["-c", "apt-get update -qq && apt-get install -y -qq samhain 2>&1 || dnf install -y samhain 2>&1 || echo 'INSTALL_FAILED'"] as &[&str])
-            }
+        let needs_sudo = !nix_is_root();
+        let description = match action {
+            "install_falco" => "Install Falco (apt-get install falco)",
+            "install_samhain" => "Install Samhain (apt-get install samhain)",
             _ => return,
         };
-        match std::process::Command::new(cmd).args(args).output() {
+
+        if needs_sudo {
+            self.sudo_popup = Some(SudoPopup {
+                action: action.to_string(),
+                password: String::new(),
+                message: description.to_string(),
+                status: SudoStatus::WaitingForPassword,
+            });
+        } else {
+            self.run_sudo_action(action, "");
+        }
+    }
+
+    fn run_sudo_action(&mut self, action: &str, password: &str) {
+        let shell_cmd = match action {
+            "install_falco" => "apt-get update -qq && apt-get install -y -qq falco 2>&1 || dnf install -y falco 2>&1 || echo 'INSTALL_FAILED'",
+            "install_samhain" => "apt-get update -qq && apt-get install -y -qq samhain 2>&1 || dnf install -y samhain 2>&1 || echo 'INSTALL_FAILED'",
+            _ => return,
+        };
+
+        let result = if nix_is_root() || password.is_empty() {
+            std::process::Command::new("bash")
+                .args(["-c", shell_cmd])
+                .output()
+        } else {
+            // Pipe password to sudo -S
+            use std::io::Write;
+            let mut child = match std::process::Command::new("sudo")
+                .args(["-S", "bash", "-c", shell_cmd])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        self.sudo_popup = Some(SudoPopup {
+                            action: action.to_string(),
+                            password: String::new(),
+                            message: String::new(),
+                            status: SudoStatus::Failed(format!("Failed to spawn sudo: {}", e)),
+                        });
+                        return;
+                    }
+                };
+            if let Some(ref mut stdin) = child.stdin {
+                let _ = writeln!(stdin, "{}", password);
+            }
+            child.wait_with_output()
+        };
+
+        self.sudo_popup = None;
+
+        match result {
             Ok(output) => {
                 let out = String::from_utf8_lossy(&output.stdout);
+                let err = String::from_utf8_lossy(&output.stderr);
                 if output.status.success() && !out.contains("INSTALL_FAILED") {
                     self.config_saved_message = Some("✅ Installed! Refresh with Left/Right.".to_string());
+                } else if err.contains("incorrect password") || err.contains("Sorry, try again") {
+                    self.config_saved_message = Some("❌ Wrong password".to_string());
                 } else {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    self.config_saved_message = Some(format!("❌ Install failed (run with sudo?) {}", stderr.chars().take(60).collect::<String>()));
+                    self.config_saved_message = Some(format!("❌ Install failed: {}", err.chars().take(80).collect::<String>()));
                 }
             }
             Err(e) => {
@@ -265,6 +357,10 @@ impl App {
         }
         self.refresh_fields();
     }
+}
+
+fn nix_is_root() -> bool {
+    unsafe { libc::getuid() == 0 }
 }
 
 fn get_section_fields(config: &Config, section: &str) -> Vec<ConfigField> {
@@ -720,7 +816,7 @@ fn render_system_tab(f: &mut Frame, area: Rect, app: &App) {
 
     let text = vec![
         Line::from(vec![
-            Span::styled("ClawAV v0.1.0", Style::default().fg(Color::Cyan).bold()),
+            Span::styled(format!("ClawAV v{}", env!("CARGO_PKG_VERSION")), Style::default().fg(Color::Cyan).bold()),
         ]),
         Line::from(""),
         Line::from(vec![
@@ -845,6 +941,66 @@ fn ui(f: &mut Frame, app: &App) {
         5 => render_config_tab(f, chunks[1], app),
         _ => {}
     }
+
+    // Sudo popup overlay
+    if let Some(ref popup) = app.sudo_popup {
+        render_sudo_popup(f, f.area(), popup);
+    }
+}
+
+fn render_sudo_popup(f: &mut Frame, area: Rect, popup: &SudoPopup) {
+    // Center a popup box
+    let popup_width = 60.min(area.width.saturating_sub(4));
+    let popup_height = 9.min(area.height.saturating_sub(2));
+    let x = (area.width.saturating_sub(popup_width)) / 2;
+    let y = (area.height.saturating_sub(popup_height)) / 2;
+    let popup_area = Rect::new(x, y, popup_width, popup_height);
+
+    // Clear background
+    let clear = Block::default().style(Style::default().bg(Color::Black));
+    f.render_widget(clear, popup_area);
+
+    let lines = match &popup.status {
+        SudoStatus::WaitingForPassword => {
+            let dots = "•".repeat(popup.password.len());
+            vec![
+                Line::from(Span::styled("🔒 Sudo Authentication Required", Style::default().fg(Color::Yellow).bold())),
+                Line::from(""),
+                Line::from(Span::raw(&popup.message)),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("Password: ", Style::default().fg(Color::Cyan)),
+                    Span::styled(format!("{}▌", dots), Style::default().fg(Color::White)),
+                ]),
+                Line::from(""),
+                Line::from(Span::styled("Enter to confirm · Esc to cancel", Style::default().fg(Color::DarkGray))),
+            ]
+        }
+        SudoStatus::Running => {
+            vec![
+                Line::from(Span::styled("⏳ Running...", Style::default().fg(Color::Yellow).bold())),
+                Line::from(""),
+                Line::from(Span::raw(&popup.message)),
+            ]
+        }
+        SudoStatus::Failed(msg) => {
+            vec![
+                Line::from(Span::styled("❌ Failed", Style::default().fg(Color::Red).bold())),
+                Line::from(""),
+                Line::from(Span::raw(msg.as_str())),
+                Line::from(""),
+                Line::from(Span::styled("Press any key to dismiss", Style::default().fg(Color::DarkGray))),
+            ]
+        }
+    };
+
+    let paragraph = Paragraph::new(lines)
+        .block(Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow))
+            .title(" Authentication "))
+        .alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(paragraph, popup_area);
 }
 
 pub async fn run_tui(mut alert_rx: mpsc::Receiver<Alert>, config_path: Option<PathBuf>) -> Result<()> {
