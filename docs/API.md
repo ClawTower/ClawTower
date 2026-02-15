@@ -24,7 +24,7 @@ curl http://localhost:18791/api/status
 {
   "status": "running",
   "uptime_seconds": 3600,
-  "version": "0.1.9",
+  "version": "0.2.0",
   "modules": {
     "auditd": true,
     "network": true,
@@ -105,7 +105,7 @@ curl http://localhost:18791/api/health
 {
   "healthy": true,
   "uptime_seconds": 3600,
-  "version": "0.1.9",
+  "version": "0.2.0",
   "last_alert_age_seconds": 45
 }
 ```
