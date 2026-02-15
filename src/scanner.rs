@@ -1703,6 +1703,34 @@ fn scan_extensions_dir(extensions_path: &str) -> Vec<ScanResult> {
     results
 }
 
+/// Check OpenClaw Control UI security settings.
+fn scan_control_ui_security(config: &str) -> Vec<ScanResult> {
+    let mut results = Vec::new();
+    
+    if config.contains("dangerouslyDisableDeviceAuth")
+        && (config.contains("\"dangerouslyDisableDeviceAuth\":true")
+            || config.contains("\"dangerouslyDisableDeviceAuth\": true")
+            || config.contains("\"dangerouslyDisableDeviceAuth\" : true")) {
+        results.push(ScanResult::new("openclaw:controlui", ScanStatus::Fail,
+            "Control UI: dangerouslyDisableDeviceAuth is TRUE — severe security downgrade"));
+    }
+    
+    if config.contains("allowInsecureAuth")
+        && (config.contains("\"allowInsecureAuth\":true")
+            || config.contains("\"allowInsecureAuth\": true")
+            || config.contains("\"allowInsecureAuth\" : true")) {
+        results.push(ScanResult::new("openclaw:controlui", ScanStatus::Warn,
+            "Control UI: allowInsecureAuth enabled — token-only auth, no device pairing"));
+    }
+    
+    if results.is_empty() {
+        results.push(ScanResult::new("openclaw:controlui", ScanStatus::Pass,
+            "Control UI security settings nominal"));
+    }
+    
+    results
+}
+
 fn scan_openclaw_security() -> Vec<ScanResult> {
     let mut results = Vec::new();
 
@@ -2131,5 +2159,36 @@ rules 0
         std::fs::write(plugin_dir.join("package.json"), "{}").unwrap();
         let result = scan_extensions_dir(dir.path().to_str().unwrap());
         assert!(result.iter().any(|r| r.status == ScanStatus::Warn));
+    }
+
+    #[test]
+    fn test_control_ui_dangerous_flag() {
+        let config = r#"{"controlUi": {"dangerouslyDisableDeviceAuth": true}}"#;
+        let results = scan_control_ui_security(config);
+        assert!(results.iter().any(|r| r.status == ScanStatus::Fail));
+    }
+
+    #[test]
+    fn test_control_ui_insecure_auth() {
+        let config = r#"{"controlUi": {"allowInsecureAuth": true}}"#;
+        let results = scan_control_ui_security(config);
+        assert!(results.iter().any(|r| r.status == ScanStatus::Warn));
+    }
+
+    #[test]
+    fn test_control_ui_secure() {
+        let config = r#"{"controlUi": {"enabled": true}}"#;
+        let results = scan_control_ui_security(config);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, ScanStatus::Pass);
+    }
+
+    #[test]
+    fn test_control_ui_both_flags() {
+        let config = r#"{"controlUi": {"dangerouslyDisableDeviceAuth": true, "allowInsecureAuth": true}}"#;
+        let results = scan_control_ui_security(config);
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().any(|r| r.status == ScanStatus::Fail));
+        assert!(results.iter().any(|r| r.status == ScanStatus::Warn));
     }
 }
