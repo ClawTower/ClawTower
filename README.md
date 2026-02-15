@@ -228,11 +228,35 @@ clawav
 # Run headless (servers, background monitoring)
 clawav run --headless
 
+# One-shot security scan and exit
+clawav scan
+
+# Show service status
+clawav status
+
+# Interactive configuration wizard
+clawav configure
+
 # Self-update to latest release
 clawav update
 
 # Check for updates without installing
 clawav update --check
+
+# Verify audit chain integrity
+clawav verify-audit
+
+# Update SecureClaw pattern databases
+clawav sync
+
+# Apply tamper-proof hardening
+clawav harden
+
+# Tail service logs
+clawav logs
+
+# Uninstall (requires admin key)
+clawav uninstall
 
 # Admin key is auto-generated on first run and printed once — save it!
 # It is stored only as an Argon2 hash at /etc/clawav/admin.key.hash

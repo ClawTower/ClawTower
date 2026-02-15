@@ -37,6 +37,7 @@ pub enum TuiEvent {
     Quit,
 }
 
+/// A single editable field in the config editor panel.
 #[derive(Clone)]
 #[allow(dead_code)]
 pub struct ConfigField {
@@ -46,19 +47,27 @@ pub struct ConfigField {
     pub field_type: FieldType,
 }
 
+/// Which panel has keyboard focus in the config editor tab.
 #[derive(Clone)]
 #[derive(PartialEq)]
 pub enum ConfigFocus {
-    Sidebar,  // Up/Down = sections, Enter = enter fields, Left/Right = switch tabs
-    Fields,   // Up/Down = fields, Enter = edit, Backspace = back to sidebar
+    /// Section sidebar: Up/Down navigates, Enter enters fields.
+    Sidebar,
+    /// Field list: Up/Down navigates, Enter edits, Backspace returns to sidebar.
+    Fields,
 }
 
+/// Type of a config field, controlling how it's edited (text input, toggle, number, or action button).
 #[derive(Clone)]
 pub enum FieldType {
+    /// Free-form text input.
     Text,
+    /// Boolean toggle (Enter flips value).
     Bool,
+    /// Numeric input.
     Number,
-    Action(String), // Action command to run on Enter
+    /// Action button — Enter runs the associated command string.
+    Action(String),
 }
 
 /// Main TUI application state.
@@ -85,20 +94,30 @@ pub struct App {
     pub sudo_popup: Option<SudoPopup>,
 }
 
+/// State for the modal sudo password prompt overlay.
 pub struct SudoPopup {
-    pub action: String,        // action to run after auth
-    pub password: String,      // password being typed
-    pub message: String,       // what we're about to do
+    /// Action to run after successful authentication.
+    pub action: String,
+    /// Password being typed (shown as dots).
+    pub password: String,
+    /// Human-readable description of the pending action.
+    pub message: String,
+    /// Current progress state.
     pub status: SudoStatus,
 }
 
+/// Progress state of a sudo authentication attempt.
 pub enum SudoStatus {
+    /// Waiting for user to type password.
     WaitingForPassword,
+    /// Command is executing.
     Running,
+    /// Authentication or command failed with an error message.
     Failed(String),
 }
 
 impl App {
+    /// Create a new TUI application with default state.
     pub fn new() -> Self {
         Self {
             alert_store: AlertStore::new(500),
@@ -130,6 +149,7 @@ impl App {
         }
     }
 
+    /// Load configuration from a file and populate the editor fields.
     pub fn load_config(&mut self, path: &PathBuf) -> Result<()> {
         let config = Config::load(path)?;
         self.config = Some(config);
@@ -138,6 +158,7 @@ impl App {
         Ok(())
     }
 
+    /// Rebuild the field list for the currently selected config section.
     pub fn refresh_fields(&mut self) {
         if let Some(ref config) = self.config {
             let section = &self.config_sections[self.config_selected_section];
@@ -149,6 +170,7 @@ impl App {
         }
     }
 
+    /// Handle a keyboard event, dispatching to the appropriate tab/panel handler.
     pub fn on_key(&mut self, key: KeyCode, modifiers: KeyModifiers) {
         // Handle sudo popup if active
         if let Some(ref mut popup) = self.sudo_popup {

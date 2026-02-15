@@ -128,6 +128,17 @@ Runs `build-preload.sh` and `enable-preload.sh`:
 rm -f "$SCRIPT_PATH"
 ```
 
+## What Happens on First Run
+
+1. ClawAV loads `/etc/clawav/config.toml` — **if this file is missing or invalid TOML, it will fail to start**.
+2. An admin key is generated (format: `OCAV-` + 64 hex chars), printed to stdout/journal **exactly once**, and stored as an Argon2 hash at `/etc/clawav/admin.key.hash`.
+3. Shadow copies are created for all sentinel-watched files.
+4. Cognitive baselines (SHA-256 hashes) are computed for identity files.
+5. All enabled monitoring sources start tailing their respective logs.
+6. A startup alert is sent to Slack (if configured): `"🛡️ ClawAV watchdog started"`.
+
+> ⚠️ **Capture the admin key immediately** from `journalctl -u clawav` — it is never shown again.
+
 ## Post-Install Verification
 
 ```bash

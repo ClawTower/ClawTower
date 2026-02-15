@@ -409,7 +409,7 @@ heartbeat_interval = 3600   # seconds (0 = disabled)
 Narrow the audit scope to specific users:
 ```toml
 [general]
-watched_users = ["deploy", "agent"]
+watched_users = ["1001", "1002"]  # Numeric UIDs (find with: id -u deploy)
 watch_all_users = false
 ```
 

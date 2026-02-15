@@ -1,6 +1,8 @@
 # ClawAV Configuration Reference
 
-ClawAV uses a TOML configuration file, typically located at `/etc/clawav/config.toml`.
+ClawAV uses a **TOML** configuration file, typically located at `/etc/clawav/config.toml`.
+
+> ⚠️ **TOML only.** Despite the `config.example.yaml` file in the repo root, ClawAV's config parser only reads TOML format. The YAML file is a legacy reference and should not be used directly.
 
 Most sections use `#[serde(default)]` — missing sections gracefully fall back to defaults. However, **five sections are required** and must be present in the config file: `[general]`, `[slack]`, `[auditd]`, `[network]`, and `[scans]`. All other sections (`[falco]`, `[samhain]`, `[api]`, `[proxy]`, `[policy]`, `[secureclaw]`, `[netpolicy]`, `[ssh]`, `[sentinel]`, `[auto_update]`) are optional and have sensible defaults.
 
@@ -26,11 +28,11 @@ Most sections use `#[serde(default)]` — missing sections gracefully fall back 
 
 ---
 
-## `[general]`
+## `[general]` ⚠️ Required
 
 **Struct:** `GeneralConfig`
 
-Controls which users are monitored and the global alert threshold.
+Controls which users are monitored and the global alert threshold. This section **must** be present in the config file (no `#[serde(default)]`).
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -57,11 +59,11 @@ log_file = "/var/log/clawav/clawav.log"
 
 ---
 
-## `[slack]`
+## `[slack]` ⚠️ Required
 
 **Struct:** `SlackConfig`
 
-Slack incoming webhook notifications with failover support.
+Slack incoming webhook notifications with failover support. This section **must** be present in the config file.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -84,11 +86,11 @@ heartbeat_interval = 3600
 
 ---
 
-## `[auditd]`
+## `[auditd]` ⚠️ Required
 
 **Struct:** `AuditdConfig`
 
-Linux audit log monitoring (syscall events).
+Linux audit log monitoring (syscall events). This section **must** be present in the config file.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -103,11 +105,11 @@ log_path = "/var/log/audit/audit.log"
 
 ---
 
-## `[network]`
+## `[network]` ⚠️ Required
 
 **Struct:** `NetworkConfig`
 
-Network/iptables log monitoring.
+Network/iptables log monitoring. This section **must** be present in the config file.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -210,11 +212,11 @@ port = 18791
 
 ---
 
-## `[scans]`
+## `[scans]` ⚠️ Required
 
 **Struct:** `ScansConfig`
 
-Periodic security scanner configuration.
+Periodic security scanner configuration. This section **must** be present in the config file.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -459,83 +461,160 @@ interval = 300
 
 ## Complete Example
 
+A fully-commented config with every field and section documented:
+
 ```toml
+# ═══════════════════════════════════════════════════════════════════════
+# ClawAV Configuration — /etc/clawav/config.toml
+# All sections use serde(default) — missing fields use sensible defaults
+# ═══════════════════════════════════════════════════════════════════════
+
 [general]
-watched_users = ["1000"]  # Numeric UID (find with: id -u openclaw)
+# Users to monitor by UID string. Find your UID with: id -u openclaw
+# Empty list + watch_all_users=false means watch ALL users.
+watched_users = ["1000"]
+# Backward-compat single user (merged into watched_users internally):
+# watched_user = "1000"
+# Override: monitor every user regardless of watched_users list
+watch_all_users = false
+# Minimum severity for internal alert processing: "info", "warning", "critical"
 min_alert_level = "info"
+# ClawAV's own log file
 log_file = "/var/log/clawav/clawav.log"
 
 [slack]
+# Explicitly enable/disable (nil = enabled if webhook_url is non-empty)
 enabled = true
+# Primary Slack incoming webhook URL
 webhook_url = "https://hooks.slack.com/services/T.../B.../xxx"
+# Failover webhook URL (empty = disabled)
 backup_webhook_url = ""
+# Target Slack channel
 channel = "#security"
+# Minimum severity forwarded to Slack: "info", "warning", "critical"
 min_slack_level = "warning"
+# Seconds between health heartbeat messages (0 = disabled)
 heartbeat_interval = 3600
 
 [auditd]
+# Enable tailing /var/log/audit/audit.log for syscall/exec events
 enabled = true
 log_path = "/var/log/audit/audit.log"
 
 [network]
+# Enable iptables/netfilter log monitoring
 enabled = true
+# Syslog path (used when source = "file")
 log_path = "/var/log/syslog"
+# Must match your iptables rule: -j LOG --log-prefix "CLAWAV_NET"
 log_prefix = "CLAWAV_NET"
+# "auto" = prefer journald, fallback to file; "journald"; "file"
 source = "auto"
-allowlisted_cidrs = ["192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "169.254.0.0/16", "127.0.0.0/8", "224.0.0.0/4"]
+# CIDR ranges that never generate alerts
+allowlisted_cidrs = [
+    "192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12",
+    "169.254.0.0/16", "127.0.0.0/8", "224.0.0.0/4",
+]
+# Destination ports that never generate alerts
 allowlisted_ports = [443, 53, 123, 5353]
 
 [falco]
+# Falco eBPF integration (requires Falco installed separately)
 enabled = false
 log_path = "/var/log/falco/falco_output.jsonl"
 
 [samhain]
+# Samhain FIM integration (requires Samhain installed separately)
 enabled = false
 log_path = "/var/log/samhain/samhain.log"
 
 [ssh]
+# Monitor SSH login events via journald (Accepted/Failed/Invalid user)
 enabled = true
 
 [api]
+# HTTP REST API: /api/status, /api/alerts, /api/health, /api/security
 enabled = false
+# Use 127.0.0.1 for local-only; 0.0.0.0 for network access
 bind = "0.0.0.0"
 port = 18791
 
 [scans]
+# Seconds between periodic security scan cycles (30+ checks)
 interval = 300
 
 [proxy]
+# API key vault proxy with DLP scanning
 enabled = false
 bind = "127.0.0.1"
 port = 18790
 
+# Virtual-to-real key mapping (agent never sees real keys):
+# [[proxy.key_mapping]]
+# virtual_key = "vk-anthropic-001"     # Key the agent uses
+# real = "sk-ant-api03-REAL-KEY"       # Actual key sent upstream
+# provider = "anthropic"                # "anthropic" (x-api-key) or "openai" (Bearer)
+# upstream = "https://api.anthropic.com"
+
+# DLP patterns scan request bodies for sensitive data:
+# [[proxy.dlp.patterns]]
+# name = "ssn"
+# regex = "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+# action = "block"                      # "block" (reject) or "redact" (replace)
+
 [policy]
+# YAML-based detection policy engine (clawsudo*.yaml files are skipped)
 enabled = true
 dir = "./policies"
 
 [secureclaw]
+# SecureClaw vendor threat pattern matching (4 JSON databases)
 enabled = false
 vendor_dir = "./vendor/secureclaw/secureclaw/skill/configs"
 
 [netpolicy]
+# Network policy enforcement for outbound connections
 enabled = false
+# "allowlist" = deny-all-except; "blocklist" = allow-all-except
 mode = "blocklist"
+# Used in allowlist mode (supports *.suffix wildcards)
+allowed_hosts = ["api.anthropic.com", "*.openai.com", "github.com"]
+allowed_ports = [80, 443, 53]
+# Used in blocklist mode
 blocked_hosts = []
 
 [sentinel]
+# Real-time file integrity monitoring via inotify
 enabled = true
 quarantine_dir = "/etc/clawav/quarantine"
 shadow_dir = "/etc/clawav/sentinel-shadow"
+# Debounce window for filesystem events (ms)
 debounce_ms = 200
+# Run SecureClaw patterns on changed content
 scan_content = true
+# Skip files larger than this (KB)
 max_file_size_kb = 1024
 
+# "protected" = quarantine + restore on change → Critical alert
 [[sentinel.watch_paths]]
 path = "/home/openclaw/.openclaw/workspace/SOUL.md"
 patterns = ["*"]
 policy = "protected"
 
+[[sentinel.watch_paths]]
+path = "/home/openclaw/.openclaw/workspace/AGENTS.md"
+patterns = ["*"]
+policy = "protected"
+
+# "watched" = update shadow, track diffs → Info alert
+[[sentinel.watch_paths]]
+path = "/home/openclaw/.openclaw/workspace/MEMORY.md"
+patterns = ["*"]
+policy = "watched"
+
 [auto_update]
+# Check GitHub releases for updates (SHA-256 + optional Ed25519 verification)
 enabled = true
+# Seconds between update checks
 interval = 300
 ```

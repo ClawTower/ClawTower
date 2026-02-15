@@ -1,5 +1,8 @@
-# ClawAV Example Configuration
-# Copy to /etc/clawav/config.yaml and adjust as needed.
+# ClawAV Example Sentinel Configuration (YAML reference only)
+#
+# ⚠️  NOTE: ClawAV uses TOML for its config file (/etc/clawav/config.toml), NOT YAML.
+# This file is a reference showing sentinel watch_paths structure.
+# Convert to TOML format before using. See config.toml for the actual config.
 
 sentinel:
   enabled: true

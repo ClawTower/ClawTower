@@ -2,6 +2,23 @@
 
 > **ClawAV** is a tamper-proof, OS-level security watchdog for AI agents. It monitors the host system for threats, policy violations, and tampering — then alerts via TUI dashboard and Slack. It is designed so that even the AI agent it protects **cannot disable or modify it** (the "swallowed key" pattern).
 
+## Glossary
+
+| Term | Meaning |
+|------|---------|
+| **Swallowed key** | Security pattern where the admin key is shown once at setup and never stored — like swallowing a physical key. The agent can't unlock what it can't find. |
+| **Sentinel** | ClawAV's real-time file watcher (built on Linux inotify). Distinct from the periodic scanner. |
+| **Cognitive** | ClawAV's AI identity file protection system — monitors files like `SOUL.md` that define the agent's personality/behavior. |
+| **SecureClaw** | A vendor pattern engine that loads JSON regex databases to detect prompt injection, dangerous commands, PII, and supply-chain threats. |
+| **DLP** | Data Loss Prevention — scanning outbound data for sensitive content (SSNs, API keys, credit cards) and blocking/redacting it. |
+| **chattr +i** | Linux command to set the "immutable" flag on a file. Even root can't modify/delete the file until `chattr -i` removes the flag. |
+| **auditd** | Linux kernel audit framework — logs syscalls (command execution, file access, network connections) at the OS level. |
+| **auid** | Audit UID — the original login UID that persists even after `su`/`sudo`. Value `4294967295` means "unset" (service/agent, not an interactive login). |
+| **Falco** | Third-party eBPF-based runtime security tool. ClawAV can tail its logs as an additional event source. |
+| **Samhain** | Third-party file integrity monitoring tool. ClawAV can tail its logs as an additional event source. |
+| **UID** | Numeric User ID in Linux (e.g., `1000`). NOT the username. Find with `id -u <username>`. |
+| **mpsc** | Multi-producer, single-consumer channel — Tokio's async message passing primitive used for the alert pipeline. |
+
 ## Table of Contents
 
 1. [Project Overview](#project-overview)
@@ -165,6 +182,8 @@ Deserializes TOML config into `Config` struct. Sections:
 
 **Key method:** `Config::load(path)`, `Config::save(path)`
 **Helper:** `GeneralConfig::effective_watched_users()` handles backward compat (`watched_user` singular → `watched_users` list)
+
+> ⚠️ **`watched_users` takes numeric UIDs** (e.g., `["1000"]`), not usernames. These are matched against auditd's `uid=` and `auid=` fields. Find a user's UID with `id -u <username>`.
 
 ### `admin.rs`
 
