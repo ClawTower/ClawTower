@@ -423,7 +423,7 @@ impl Default for SentinelConfig {
                 WatchPathConfig {
                     path: "/home/openclaw/.openclaw/workspace/superpowers/skills".to_string(),
                     patterns: vec!["SKILL.md".to_string()],
-                    policy: WatchPolicy::Protected,
+                    policy: WatchPolicy::Watched,
                 },
             ],
             quarantine_dir: default_quarantine_dir(),

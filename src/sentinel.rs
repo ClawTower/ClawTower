@@ -507,10 +507,10 @@ mod tests {
     }
 
     #[test]
-    fn test_default_config_skills_dir_protected() {
+    fn test_default_config_skills_dir_watched() {
         let config = SentinelConfig::default();
         let sk = config.watch_paths.iter().find(|w| w.path.contains("superpowers/skills")).unwrap();
-        assert!(matches!(sk.policy, WatchPolicy::Protected));
+        assert!(matches!(sk.policy, WatchPolicy::Watched));
         assert_eq!(sk.patterns, vec!["SKILL.md".to_string()]);
     }
 
@@ -525,7 +525,7 @@ mod tests {
     fn test_policy_for_path_directory_pattern_match() {
         let config = SentinelConfig::default();
         let policy = policy_for_path(&config, "/home/openclaw/.openclaw/workspace/superpowers/skills/some_skill/SKILL.md");
-        assert!(matches!(policy, Some(WatchPolicy::Protected)));
+        assert!(matches!(policy, Some(WatchPolicy::Watched)));
     }
 
     #[test]
