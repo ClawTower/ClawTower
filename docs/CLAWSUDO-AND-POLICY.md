@@ -439,3 +439,11 @@ rules:
 │  Admin socket (Argon2-authed)               │  ← Authenticated control plane
 └─────────────────────────────────────────────┘
 ```
+
+## See Also
+
+- [POLICIES.md](POLICIES.md) — YAML policy writing guide (detection + enforcement rules)
+- [ALERT-PIPELINE.md](ALERT-PIPELINE.md) — How policy alerts flow through aggregation to Slack/TUI
+- [CONFIGURATION.md](CONFIGURATION.md) — `[policy]`, `[proxy]`, and `[netpolicy]` config sections
+- [INSTALL.md](INSTALL.md) — Setup scripts for auditd, sudoers deny, LD_PRELOAD guard
+- [INDEX.md](INDEX.md) — Full documentation index

@@ -10,7 +10,7 @@
 //! are allowlisted to reduce false positives.
 //!
 //! This is the "hardcoded" detection layer — for user-configurable rules,
-//! see the [`policy`] module.
+//! see the `policy` module.
 
 use std::fmt;
 

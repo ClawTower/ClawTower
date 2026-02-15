@@ -31,7 +31,7 @@ pub enum Actor {
 pub struct ParsedEvent {
     /// Human-readable syscall name (e.g. "execve", "openat")
     pub syscall_name: String,
-    /// The full command if EXECVE (e.g. "curl http://evil.com")
+    /// The full command if EXECVE (e.g. "curl <http://evil.com>")
     pub command: Option<String>,
     /// Individual arguments from EXECVE
     pub args: Vec<String>,
@@ -43,7 +43,7 @@ pub struct ParsedEvent {
     pub raw: String,
     /// Attribution: agent (auid unset) vs human (auid set)
     pub actor: Actor,
-    /// Parent process executable path (from /proc/<ppid>/exe)
+    /// Parent process executable path (from `/proc/<ppid>/exe`)
     pub ppid_exe: Option<String>,
 }
 

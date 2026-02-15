@@ -1,4 +1,4 @@
-# OpenClawAV — Custom Falco Rules for OpenClaw Agent Monitoring
+# ClawAV — Custom Falco Rules for OpenClaw Agent Monitoring
 # These rules monitor the 'openclaw' user for suspicious behavior.
 
 # ============================================================
@@ -11,7 +11,7 @@
 - macro: openclaw_allowed_binaries
   condition: >
     proc.name in (node, npm, npx, git, bash, sh, curl, wget,
-                  openclawav, journalctl, cat, ls, grep, find,
+                  clawav, journalctl, cat, ls, grep, find,
                   python3, pip3, cargo, rustc, ffmpeg, ffprobe)
 
 - macro: openclaw_allowed_dirs
@@ -120,12 +120,12 @@
 # ============================================================
 
 - rule: OpenClaw Access Watchdog Files
-  desc: Detect openclaw accessing OpenClawAV files
+  desc: Detect openclaw accessing ClawAV files
   condition: >
     openclaw_user and open_read and
-    (fd.name startswith /etc/openclawav/ or
-     fd.name startswith /opt/openclawav/ or
-     fd.name startswith /var/log/openclawav/)
+    (fd.name startswith /etc/clawav/ or
+     fd.name startswith /opt/clawav/ or
+     fd.name startswith /var/log/clawav/)
   output: >
     OpenClaw accessing watchdog files
     (user=%user.name file=%fd.name command=%proc.cmdline)

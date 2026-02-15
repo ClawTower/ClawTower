@@ -1,7 +1,7 @@
 //! clawsudo — sudo proxy/gatekeeper for ClawAV
 //!
 //! Every privileged command goes through policy evaluation before execution.
-//! Usage: clawsudo <command> [args...]
+//! Usage: `clawsudo <command> [args...]`
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};

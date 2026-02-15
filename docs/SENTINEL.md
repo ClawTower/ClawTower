@@ -488,3 +488,11 @@ The Sentinel runs as part of the ClawAV daemon. Restart ClawAV to restart the Se
 ```bash
 sudo systemctl restart clawav
 ```
+
+## See Also
+
+- [SECURITY-SCANNERS.md](SECURITY-SCANNERS.md) — Periodic cognitive integrity scans (complement to real-time Sentinel)
+- [CONFIGURATION.md](CONFIGURATION.md) — Full `[sentinel]` config reference
+- [MONITORING-SOURCES.md](MONITORING-SOURCES.md) — All real-time data sources including Sentinel
+- [ALERT-PIPELINE.md](ALERT-PIPELINE.md) — How Sentinel alerts flow through aggregation
+- [INDEX.md](INDEX.md) — Full documentation index

@@ -618,3 +618,11 @@ enabled = true
 # Seconds between update checks
 interval = 300
 ```
+
+## See Also
+
+- [INSTALL.md](INSTALL.md) — Installation walkthrough and hardening steps
+- [SENTINEL.md](SENTINEL.md) — Deep dive into `[sentinel]` file watching behavior
+- [POLICIES.md](POLICIES.md) — Writing YAML rules for the `[policy]` engine
+- [CLAWSUDO-AND-POLICY.md](CLAWSUDO-AND-POLICY.md) — `[proxy]` DLP setup and admin key system
+- [INDEX.md](INDEX.md) — Full documentation index

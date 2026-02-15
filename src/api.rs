@@ -6,7 +6,7 @@
 //! - `GET /api/health` — health check with last alert age
 //! - `GET /api/security` — alert counts by severity and source
 //!
-//! Uses a [`SharedAlertStore`] (Arc<Mutex<AlertRingBuffer>>) shared with the aggregator.
+//! Uses a [`SharedAlertStore`] (`Arc<Mutex<AlertRingBuffer>>`) shared with the aggregator.
 
 use std::collections::VecDeque;
 use std::convert::Infallible;

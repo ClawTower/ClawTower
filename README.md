@@ -101,27 +101,38 @@ sudo chattr +i /usr/local/bin/clawav
 ### Initial Setup
 
 ```bash
-# Create config directory
+# 1. Create config directory and copy config
 sudo mkdir -p /etc/clawav
-
-# Copy and edit config
 sudo cp config.toml /etc/clawav/config.toml
-sudo nano /etc/clawav/config.toml
+sudo nano /etc/clawav/config.toml    # Edit watched_users, slack webhook, etc.
 
-# Admin key is auto-generated on first run — check journalctl output to capture it
-# It is displayed once and stored only as an Argon2 hash
+# 2. Run the setup script (installs binary, creates dirs, sets up systemd)
+sudo scripts/setup.sh
 
-# Set up monitoring integrations (all optional)
-sudo scripts/setup-auditd.sh        # Auditd rules for syscall monitoring
-sudo scripts/setup-iptables.sh      # Iptables logging for network alerts
-sudo scripts/setup-apparmor.sh      # AppArmor confinement profiles
-sudo scripts/setup-sudoers-deny.sh  # Block agent from stopping ClawAV via sudo
-sudo scripts/setup-slack.sh         # Configure Slack webhook
-sudo scripts/setup-falco.sh         # Falco eBPF monitoring (optional)
-sudo scripts/setup-samhain.sh       # Samhain file integrity (optional)
+# 3. Admin key is auto-generated on first run — save it!
+#    It is displayed ONCE in journalctl output and stored only as an Argon2 hash
+```
+
+**Recommended hardening** (run after setup):
+
+```bash
+sudo scripts/setup-auditd.sh        # Syscall monitoring — highly recommended
+sudo scripts/setup-sudoers-deny.sh  # Block agent from stopping ClawAV
+sudo scripts/setup-slack.sh         # Slack alerts
+```
+
+**Optional integrations** (add as needed):
+
+```bash
+sudo scripts/setup-iptables.sh      # Network alert logging
+sudo scripts/setup-apparmor.sh      # AppArmor confinement
 sudo scripts/build-preload.sh       # Build LD_PRELOAD guard library
 sudo scripts/enable-preload.sh      # Activate LD_PRELOAD guard
+sudo scripts/setup-falco.sh         # Falco eBPF monitoring
+sudo scripts/setup-samhain.sh       # Samhain file integrity
 ```
+
+> 📖 **Full installation guide:** See [`docs/INSTALL.md`](docs/INSTALL.md) for prerequisites, hardening details, and recovery procedures.
 
 ### Available Scripts
 
@@ -365,3 +376,7 @@ rules:
 ## License
 
 MIT — see [LICENSE](LICENSE) for details.
+
+---
+
+> 📚 **[Full Documentation Index →](docs/INDEX.md)**

@@ -244,3 +244,11 @@ systemctl daemon-reload
 # Revert sysctl (will take effect on next boot):
 # Remove kernel.modules_disabled and ptrace_scope from sysctl
 ```
+
+## See Also
+
+- [CONFIGURATION.md](CONFIGURATION.md) — Full config reference for every TOML field
+- [SENTINEL.md](SENTINEL.md) — Setting up real-time file integrity monitoring
+- [MONITORING-SOURCES.md](MONITORING-SOURCES.md) — Enabling auditd, Falco, Samhain, and other sources
+- [CLAWSUDO-AND-POLICY.md](CLAWSUDO-AND-POLICY.md) — clawsudo setup and admin key details
+- [INDEX.md](INDEX.md) — Full documentation index

@@ -1,5 +1,7 @@
 # Documentation Audit Log
 
+> ℹ️ **This is an internal maintainer reference**, not a user-facing guide. It records errors found and fixed during documentation audits. Looking for user docs? See [INDEX.md](INDEX.md).
+
 **Date:** 2025-07-25
 **Auditor:** Claude (subagent docs-audit-1)
 **Scope:** All source files in `src/` and `src/bin/` checked against all documentation files.
