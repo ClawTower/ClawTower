@@ -204,9 +204,21 @@ impl Sentinel {
         };
 
         let shadow = shadow_path_for(&self.config.shadow_dir, path);
+        let shadow_exists = shadow.exists();
         let previous = std::fs::read_to_string(&shadow).unwrap_or_default();
 
         if current == previous {
+            return;
+        }
+
+        // First time seeing this file — initialize shadow, don't treat as threat
+        if !shadow_exists {
+            let _ = std::fs::write(&shadow, &current);
+            let _ = self.alert_tx.send(Alert::new(
+                Severity::Info,
+                "sentinel",
+                &format!("New watched file detected, shadow initialized: {}", path),
+            )).await;
             return;
         }
 
