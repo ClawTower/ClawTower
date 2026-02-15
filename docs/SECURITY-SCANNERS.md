@@ -489,21 +489,31 @@ Checks for suspicious `LD_PRELOAD`, `LD_LIBRARY_PATH` containing /tmp, proxy/tor
 
 #### `scan_cognitive_integrity()` *(in `src/cognitive.rs`)*
 
-Verifies SHA-256 hashes of AI identity files (SOUL.md, AGENTS.md, etc.) against `/etc/clawav/cognitive-baselines.sha256`. Also runs SecureClaw pattern scans on file content for injection attempts.
+Verifies SHA-256 hashes of AI identity files against `/etc/clawav/cognitive-baselines.sha256`. Protected files: `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, `AGENTS.md`, `USER.md`, `HEARTBEAT.md`. Watched (mutable) files: `MEMORY.md`. On first run, creates baselines and shadow copies for watched files.
 
 | Status | Condition |
 |--------|-----------|
-| Pass | All cognitive files match baseline |
-| Warn | Files changed from baseline |
-| Fail | Injection patterns detected in identity files |
+| Pass | All cognitive files match baseline (or baselines just created) |
+| Warn | Watched file (MEMORY.md) changed — auto-rebaselined with diff |
+| Fail | Protected file modified or deleted (tampering) |
 
-**Remediation:** Verify changes are legitimate; update baselines with `clawav --store-cognitive-baselines`.
+Protected file changes produce a `TAMPERING DETECTED` message. Watched file changes are reported with a diff summary (lines added/removed) and automatically rebaselined. Shadow copies in `/etc/clawav/cognitive-shadow/` enable diff generation for watched files.
+
+**Note:** SecureClaw content scanning is intentionally **not** applied to cognitive files — watched files like MEMORY.md contain too many technical references that trigger false positives. See [SENTINEL.md](SENTINEL.md#relationship-to-cognitive-monitoring) for how the real-time Sentinel layer provides content scanning.
+
+**Remediation:** If a protected file change is legitimate, delete `/etc/clawav/cognitive-baselines.sha256` and restart ClawAV to regenerate baselines.
 
 ---
 
 #### `scan_audit_log_health()` *(in `src/logtamper.rs`)*
 
-Checks audit log file existence, permissions, and health at `/var/log/audit/audit.log`.
+Checks audit log file existence, permissions, and health at `/var/log/audit/audit.log`. See also [MONITORING-SOURCES.md](MONITORING-SOURCES.md#6-log-tamper-detection) for the real-time tamper detection monitor.
+
+| Status | Condition |
+|--------|-----------|
+| Pass | File exists, permissions secure (not world-readable/writable), non-zero size |
+| Warn | World-readable permissions, empty file, or permission denied |
+| Fail | File missing or world-writable |
 
 ---
 
