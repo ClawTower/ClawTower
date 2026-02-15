@@ -389,14 +389,58 @@ if [[ "$MODE" == "upgrade" ]]; then
     cp "$TMPDIR/clawsudo" /usr/local/bin/clawsudo
     chmod 755 /usr/local/bin/clawav /usr/local/bin/clawsudo
 
-    # Update tray binary if it exists in the release and is installed locally
+    # Detect display server for tray install
+    CALLING_USER="${SUDO_USER:-$(whoami)}"
+    CALLING_HOME=$(eval echo "~$CALLING_USER")
+    DISPLAY_SERVER="headless"
+    if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
+        DISPLAY_SERVER="wayland"
+    elif su -s /bin/sh "$CALLING_USER" -c 'echo $WAYLAND_DISPLAY' 2>/dev/null | grep -q .; then
+        DISPLAY_SERVER="wayland"
+    elif [[ -n "${DISPLAY:-}" ]]; then
+        DISPLAY_SERVER="x11"
+    fi
+
+    # Always install/update tray binary on systems with a display server
     TRAY_ARTIFACT="clawav-tray-${ARCH_LABEL}-linux"
-    if [[ -f /usr/local/bin/clawav-tray ]]; then
-        log "Updating tray binary..."
+    if [[ "$DISPLAY_SERVER" != "headless" ]]; then
+        log "Installing/updating tray binary ($DISPLAY_SERVER detected)..."
         if curl -sSL -f -o "$TMPDIR/clawav-tray" "$BASE_URL/$TRAY_ARTIFACT" 2>/dev/null; then
+            chattr -i /usr/local/bin/clawav-tray 2>/dev/null || true
             chmod +x "$TMPDIR/clawav-tray"
             cp "$TMPDIR/clawav-tray" /usr/local/bin/clawav-tray
             chmod 755 /usr/local/bin/clawav-tray
+            chattr +i /usr/local/bin/clawav-tray
+            log "✓ Tray binary installed"
+
+            # Ensure autostart entry exists
+            AUTOSTART_DIR="$CALLING_HOME/.config/autostart"
+            if [[ ! -f "$AUTOSTART_DIR/clawav-tray.desktop" ]]; then
+                mkdir -p "$AUTOSTART_DIR"
+                cat > "$AUTOSTART_DIR/clawav-tray.desktop" <<TRAYEOF
+[Desktop Entry]
+Type=Application
+Name=ClawAV Tray
+Exec=/usr/local/bin/clawav-tray
+Icon=security-high
+Comment=ClawAV security watchdog tray icon
+X-GNOME-Autostart-enabled=true
+TRAYEOF
+                chown "$CALLING_USER:$(id -gn "$CALLING_USER")" "$AUTOSTART_DIR/clawav-tray.desktop"
+                log "✓ Tray autostart entry created"
+            fi
+        else
+            warn "Tray binary not available in this release — keeping existing"
+        fi
+    elif [[ -f /usr/local/bin/clawav-tray ]]; then
+        # Headless but tray was previously installed — still update binary
+        log "Updating tray binary (headless, but previously installed)..."
+        if curl -sSL -f -o "$TMPDIR/clawav-tray" "$BASE_URL/$TRAY_ARTIFACT" 2>/dev/null; then
+            chattr -i /usr/local/bin/clawav-tray 2>/dev/null || true
+            chmod +x "$TMPDIR/clawav-tray"
+            cp "$TMPDIR/clawav-tray" /usr/local/bin/clawav-tray
+            chmod 755 /usr/local/bin/clawav-tray
+            chattr +i /usr/local/bin/clawav-tray
             log "✓ Tray binary updated"
         else
             warn "Tray binary not available in this release — keeping existing"
