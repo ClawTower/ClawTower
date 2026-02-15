@@ -33,6 +33,7 @@ rules:
         - "pypi.org"
         # Utilities
         - "wttr.in"
+        - "api.open-meteo.com"
     action: critical
 
   # ── Reverse Shell Detection ────────────────────────────────────────────────
