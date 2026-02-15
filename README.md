@@ -2,7 +2,7 @@
 
 # 🛡️ ClawAV
 
-**Tamper-proof security watchdog for AI agents**
+**OS-level runtime security for AI agents — any agent, any framework**
 
 [![Build](https://img.shields.io/github/actions/workflow/status/coltz108/ClawAV/ci.yml?branch=main&style=flat-square)](https://github.com/coltz108/ClawAV/actions)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
@@ -15,6 +15,8 @@
 ## Table of Contents
 
 - [What is ClawAV?](#what-is-clawav)
+- [Who It's For](#who-its-for)
+- [How ClawAV Fits](#how-clawav-fits)
 - [Features](#features)
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
@@ -30,6 +32,40 @@ Autonomous AI agents operate with real system access — executing commands, edi
 ClawAV solves this with the **"swallowed key" pattern**: the agent (or its operator) installs ClawAV, but once running, the agent *cannot* modify, disable, or uninstall it. The binary is immutable (`chattr +i`), the service is protected by systemd, and the admin key is hashed and stored outside the agent's reach. Every attempt to tamper is logged and alerted on.
 
 Under the hood, ClawAV provides real-time file integrity monitoring via inotify, behavioral analysis of syscalls through auditd, threat pattern detection across file contents, and 30+ periodic security scanners — all feeding into a hash-chained audit trail that's cryptographically tamper-evident. Think of it as an immune system for machines running AI agents.
+
+## Who It's For
+
+ClawAV is **agent-agnostic**. It works at the OS level — auditd, AppArmor, syscall interception — so it doesn't need hooks into your agent's code. If it runs on Linux, ClawAV can watch it:
+
+- **[OpenClaw](https://openclaw.ai)** agents and ClawHub skills
+- **Claude Code**, **Codex CLI**, **Aider**, **Continue**
+- **Devin**, **SWE-agent**, and other autonomous coding agents
+- **Custom agents** built on LangChain, CrewAI, AutoGen, or raw API calls
+- Any process running under a monitored user account
+
+No SDK integration required. Install ClawAV, point it at the user your agent runs as, and it starts watching.
+
+## How ClawAV Fits
+
+AI agent security isn't one layer — it's a stack. Different tools cover different stages:
+
+| Layer | When | What | Examples |
+|-------|------|------|----------|
+| **Marketplace scanning** | Pre-install | Static analysis of skill/plugin packages | OpenClaw + VirusTotal, npm audit |
+| **Code review** | Pre-execution | LLM-powered behavioral analysis of code | OpenClaw Code Insight, manual review |
+| **Runtime monitoring** | Continuous | Watching what agents *actually do* on the machine | **ClawAV** |
+| **Network policy** | Continuous | Controlling outbound connections | **ClawAV** netpolicy, firewall rules |
+
+**ClawAV operates at the runtime layer** — the part that catches what static scanning can't:
+
+- A skill passes VirusTotal but uses prompt injection to exfiltrate data at runtime
+- An agent's behavior changes after a context window is poisoned
+- A legitimate tool (`curl`, `scp`) is used for unauthorized data transfer
+- Someone tampers with the agent's identity or configuration files
+
+Marketplace scanners like VirusTotal are great at catching known malware signatures. ClawAV catches the *unknown* — novel exfiltration, privilege escalation, reverse shells, and tamper attempts — through behavioral analysis and policy enforcement.
+
+**They're complementary.** Use both. Gate your marketplace; guard your machine.
 
 ## Features
 
