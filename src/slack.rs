@@ -103,7 +103,7 @@ impl SlackNotifier {
             "channel": self.channel,
             "username": "ClawAV",
             "icon_emoji": ":shield:",
-            "text": format!("💚 ClawAV heartbeat — uptime: {}h {}m, alerts processed: {}",
+            "text": format!("❤️ ClawAV heartbeat — uptime: {}h {}m, alerts processed: {}",
                 uptime_secs / 3600, (uptime_secs % 3600) / 60, alert_count)
         });
         self.post_webhook(&payload).await
