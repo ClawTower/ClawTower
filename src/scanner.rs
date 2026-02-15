@@ -20,6 +20,7 @@
 
 use chrono::{DateTime, Local};
 use serde::Serialize;
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
@@ -1515,6 +1516,69 @@ impl SecurityScanner {
 }
 
 /// OpenClaw-specific security checks
+/// Check that a path has permissions no more permissive than `max_mode`.
+fn check_path_permissions(path: &str, max_mode: u32, label: &str) -> ScanResult {
+    match std::fs::metadata(path) {
+        Ok(meta) => {
+            let mode = meta.permissions().mode() & 0o777;
+            if mode <= max_mode {
+                ScanResult::new(
+                    &format!("openclaw:perms:{}", label),
+                    ScanStatus::Pass,
+                    &format!("{} permissions {:o} (max {:o})", path, mode, max_mode),
+                )
+            } else {
+                ScanResult::new(
+                    &format!("openclaw:perms:{}", label),
+                    ScanStatus::Fail,
+                    &format!("{} permissions {:o} — should be {:o} or tighter", path, mode, max_mode),
+                )
+            }
+        }
+        Err(_) => ScanResult::new(
+            &format!("openclaw:perms:{}", label),
+            ScanStatus::Warn,
+            &format!("{} not found — skipping permission check", path),
+        ),
+    }
+}
+
+/// Check for symlinks inside a directory that point outside it (symlink attack vector).
+fn check_symlinks_in_dir(dir: &str) -> ScanResult {
+    let dir_path = std::path::Path::new(dir);
+    if !dir_path.exists() {
+        return ScanResult::new("openclaw:symlinks", ScanStatus::Warn,
+            &format!("{} not found", dir));
+    }
+
+    let mut suspicious = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir_path) {
+        for entry in entries.flatten() {
+            if entry.file_type().map(|ft| ft.is_symlink()).unwrap_or(false) {
+                if let Ok(target) = std::fs::read_link(entry.path()) {
+                    let resolved = entry.path().parent()
+                        .unwrap_or(dir_path)
+                        .join(&target);
+                    if let Ok(canonical) = std::fs::canonicalize(&resolved) {
+                        if !canonical.starts_with(dir_path) {
+                            suspicious.push(format!("{} → {}",
+                                entry.path().display(), canonical.display()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if suspicious.is_empty() {
+        ScanResult::new("openclaw:symlinks", ScanStatus::Pass,
+            &format!("No suspicious symlinks in {}", dir))
+    } else {
+        ScanResult::new("openclaw:symlinks", ScanStatus::Fail,
+            &format!("Symlinks pointing outside directory: {}", suspicious.join(", ")))
+    }
+}
+
 fn scan_openclaw_security() -> Vec<ScanResult> {
     let mut results = Vec::new();
 
@@ -1576,6 +1640,44 @@ fn scan_openclaw_security() -> Vec<ScanResult> {
         results.push(ScanResult::new("openclaw:config", ScanStatus::Warn,
             "OpenClaw gateway config not found — skipping OpenClaw checks"));
     }
+
+    // Permission checks (from OpenClaw security docs)
+    let state_dir = "/home/openclaw/.openclaw";
+    results.push(check_path_permissions(state_dir, 0o700, "state_dir"));
+    results.push(check_path_permissions(
+        &format!("{}/openclaw.json", state_dir), 0o600, "config"));
+
+    // Check credential files aren't group/world readable
+    let cred_dir = format!("{}/credentials", state_dir);
+    if std::path::Path::new(&cred_dir).exists() {
+        results.push(check_path_permissions(&cred_dir, 0o700, "credentials_dir"));
+        if let Ok(entries) = std::fs::read_dir(&cred_dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_file() {
+                    results.push(check_path_permissions(
+                        p.to_str().unwrap_or(""), 0o600,
+                        &format!("cred:{}", p.file_name().unwrap_or_default().to_string_lossy())));
+                }
+            }
+        }
+    }
+
+    // Session log permissions
+    let agents_dir = format!("{}/agents", state_dir);
+    if let Ok(agents) = std::fs::read_dir(&agents_dir) {
+        for agent in agents.flatten() {
+            let sessions_dir = agent.path().join("sessions");
+            if sessions_dir.exists() {
+                results.push(check_path_permissions(
+                    sessions_dir.to_str().unwrap_or(""), 0o700,
+                    &format!("sessions:{}", agent.file_name().to_string_lossy())));
+            }
+        }
+    }
+
+    // Symlink safety check
+    results.push(check_symlinks_in_dir(state_dir));
 
     // ── 4. Access via Tailscale/SSH tunnel ───────────────────────────────
     // Check if Tailscale is running
@@ -1788,5 +1890,42 @@ rules 0
         
         let unknown_status = "Processor vulnerable";
         assert!(!unknown_status.contains("Mitigation:") && !unknown_status.contains("Not affected"));
+    }
+
+    #[test]
+    fn test_check_path_permissions_secure() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let result = check_path_permissions(dir.path().to_str().unwrap(), 0o700, "test_dir");
+        assert_eq!(result.status, ScanStatus::Pass);
+    }
+
+    #[test]
+    fn test_check_path_permissions_too_open() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let result = check_path_permissions(dir.path().to_str().unwrap(), 0o700, "test_dir");
+        assert_eq!(result.status, ScanStatus::Fail);
+    }
+
+    #[test]
+    fn test_check_path_permissions_missing() {
+        let result = check_path_permissions("/nonexistent/path/12345", 0o700, "missing");
+        assert_eq!(result.status, ScanStatus::Warn);
+    }
+
+    #[test]
+    fn test_check_symlinks_no_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = check_symlinks_in_dir(dir.path().to_str().unwrap());
+        assert_eq!(result.status, ScanStatus::Pass);
+    }
+
+    #[test]
+    fn test_check_symlinks_missing_dir() {
+        let result = check_symlinks_in_dir("/nonexistent/dir/12345");
+        assert_eq!(result.status, ScanStatus::Warn);
     }
 }
