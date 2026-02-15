@@ -167,6 +167,19 @@ async fn handle(
                 .collect();
             json_response(StatusCode::OK, serde_json::to_string(&alerts).unwrap())
         }
+        "/api/health" => {
+            let store = store.lock().await;
+            let last_alert_age = store.last_n(1).first().map(|a| {
+                chrono::Utc::now().signed_duration_since(a.timestamp).num_seconds() as u64
+            });
+            let resp = serde_json::json!({
+                "healthy": true,
+                "uptime_seconds": start_time.elapsed().as_secs(),
+                "version": env!("CARGO_PKG_VERSION"),
+                "last_alert_age_seconds": last_alert_age,
+            });
+            json_response(StatusCode::OK, serde_json::to_string(&resp).unwrap())
+        }
         "/api/security" => {
             let store = store.lock().await;
             let (info, warn, crit) = store.count_by_severity();

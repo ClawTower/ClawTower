@@ -483,6 +483,21 @@ async fn async_main() -> Result<()> {
         eprintln!("Slack startup message failed: {}", e);
     }
 
+    // Spawn periodic heartbeat if enabled
+    let heartbeat_interval = config.slack.heartbeat_interval;
+    if heartbeat_interval > 0 {
+        let heartbeat_notifier = SlackNotifier::new(&config.slack);
+        let start = std::time::Instant::now();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(heartbeat_interval));
+            interval.tick().await; // skip first
+            loop {
+                interval.tick().await;
+                let _ = heartbeat_notifier.send_heartbeat(start.elapsed().as_secs(), 0).await;
+            }
+        });
+    }
+
     // Spawn Slack forwarder
     tokio::spawn(async move {
         while let Some(alert) = slack_rx.recv().await {

@@ -85,6 +85,20 @@ impl SlackNotifier {
         self.post_webhook(&payload).await
     }
 
+    pub async fn send_heartbeat(&self, uptime_secs: u64, alert_count: u64) -> Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+        let payload = serde_json::json!({
+            "channel": self.channel,
+            "username": "ClawAV",
+            "icon_emoji": ":shield:",
+            "text": format!("💚 ClawAV heartbeat — uptime: {}h {}m, alerts processed: {}",
+                uptime_secs / 3600, (uptime_secs % 3600) / 60, alert_count)
+        });
+        self.post_webhook(&payload).await
+    }
+
     pub async fn send_alert(&self, alert: &Alert) -> Result<()> {
         if !self.enabled {
             return Ok(());

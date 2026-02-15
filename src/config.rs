@@ -80,6 +80,13 @@ pub struct SlackConfig {
     pub backup_webhook_url: String,
     pub channel: String,
     pub min_slack_level: String,
+    /// Interval in seconds for periodic health heartbeat to Slack (0 = disabled)
+    #[serde(default = "default_heartbeat_interval")]
+    pub heartbeat_interval: u64,
+}
+
+fn default_heartbeat_interval() -> u64 {
+    3600
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
