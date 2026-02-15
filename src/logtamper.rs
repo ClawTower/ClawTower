@@ -56,6 +56,16 @@ fn check_log_file(
     if let Some(prev_inode) = *last_inode {
         if current_inode != prev_inode {
             *last_inode = Some(current_inode);
+            // Check if this is log rotation (rotated file exists)
+            if crate::sentinel::is_log_rotation(&path.to_string_lossy()) {
+                *last_size = Some(current_size);
+                return Some(Alert::new(
+                    Severity::Info,
+                    "logtamper/rotation",
+                    &format!("Log rotated: {} — inode {} → {} (rotation detected)",
+                        path.display(), prev_inode, current_inode),
+                ));
+            }
             *last_size = Some(current_size);
             return Some(Alert::new(
                 Severity::Critical,
