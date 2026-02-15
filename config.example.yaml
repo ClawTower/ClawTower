@@ -1,0 +1,23 @@
+# ClawAV Example Configuration
+# Copy to /etc/clawav/config.yaml and adjust as needed.
+
+sentinel:
+  enabled: true
+  watch_paths:
+    - path: "/home/openclaw/.openclaw/workspace"
+      patterns: ["SOUL.md", "IDENTITY.md", "AGENTS.md", "USER.md", "TOOLS.md", "HEARTBEAT.md"]
+      policy: protected
+    - path: "/home/openclaw/.openclaw/workspace"
+      patterns: ["MEMORY.md"]
+      policy: watched
+    - path: "/etc"
+      patterns: ["passwd", "shadow", "sudoers", "ssh/sshd_config"]
+      policy: protected
+    - path: "/home/openclaw"
+      patterns: [".bashrc", ".profile", ".ssh/authorized_keys"]
+      policy: protected
+  quarantine_dir: "/etc/clawav/quarantine"
+  shadow_dir: "/etc/clawav/sentinel-shadow"
+  debounce_ms: 200
+  scan_content: true
+  max_file_size_kb: 1024
