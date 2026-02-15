@@ -150,3 +150,10 @@ rules:
 ```
 
 Rules from all `.yaml`/`.yml` files in the policy directories are merged. No restart required for the policy engine (files are loaded at startup), but clawsudo re-reads on each invocation.
+
+## See Also
+
+- [CLAWSUDO-AND-POLICY.md](CLAWSUDO-AND-POLICY.md) — clawsudo approval flow, admin key, audit chain
+- [ALERT-PIPELINE.md](ALERT-PIPELINE.md) — How policy alerts are routed through the pipeline
+- [CONFIGURATION.md](CONFIGURATION.md) — `[policy]` config section reference
+- [MONITORING-SOURCES.md](MONITORING-SOURCES.md) — Policy engine as an alert source

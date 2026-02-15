@@ -290,7 +290,7 @@ Out of the box, the Sentinel watches:
 Watch any file or directory by adding entries:
 
 ```toml
-# Protect SSH authorized keys
+# Protect SSH authorized keys from persistence attacks
 [[sentinel.watch_paths]]
 path = "/home/openclaw/.ssh/authorized_keys"
 patterns = ["*"]
@@ -310,6 +310,100 @@ policy = "watched"
 ```
 
 **Note on directories:** The Sentinel watches the parent directory of each path with `NonRecursive` mode. For directory paths, it watches the directory itself. Files within are matched if their path starts with the configured path string.
+
+### Real-World Configuration Recipes
+
+**Protect Docker configuration from container escape setups:**
+
+```toml
+[[sentinel.watch_paths]]
+path = "/etc/docker/daemon.json"
+patterns = ["*"]
+policy = "protected"
+
+[[sentinel.watch_paths]]
+path = "/etc/docker/seccomp"
+patterns = ["*"]
+policy = "protected"
+
+# Watch docker-compose files for supply-chain changes
+[[sentinel.watch_paths]]
+path = "/opt/docker/docker-compose.yml"
+patterns = ["*"]
+policy = "watched"
+```
+
+**Protect SSH keys and SSH daemon config:**
+
+```toml
+# Prevent unauthorized SSH key injection
+[[sentinel.watch_paths]]
+path = "/home/openclaw/.ssh/authorized_keys"
+patterns = ["*"]
+policy = "protected"
+
+[[sentinel.watch_paths]]
+path = "/root/.ssh/authorized_keys"
+patterns = ["*"]
+policy = "protected"
+
+# Protect SSH daemon settings
+[[sentinel.watch_paths]]
+path = "/etc/ssh/sshd_config"
+patterns = ["*"]
+policy = "protected"
+```
+
+**Watch crontabs for persistence mechanisms:**
+
+```toml
+# Protect system crontab
+[[sentinel.watch_paths]]
+path = "/etc/crontab"
+patterns = ["*"]
+policy = "protected"
+
+# Watch cron directories for new jobs
+[[sentinel.watch_paths]]
+path = "/etc/cron.d/"
+patterns = ["*"]
+policy = "watched"
+
+[[sentinel.watch_paths]]
+path = "/etc/cron.daily/"
+patterns = ["*"]
+policy = "watched"
+
+# Protect user crontab spool
+[[sentinel.watch_paths]]
+path = "/var/spool/cron/crontabs/openclaw"
+patterns = ["*"]
+policy = "protected"
+```
+
+**Protect system authentication files:**
+
+```toml
+[[sentinel.watch_paths]]
+path = "/etc/passwd"
+patterns = ["*"]
+policy = "protected"
+
+[[sentinel.watch_paths]]
+path = "/etc/shadow"
+patterns = ["*"]
+policy = "protected"
+
+[[sentinel.watch_paths]]
+path = "/etc/sudoers"
+patterns = ["*"]
+policy = "protected"
+
+[[sentinel.watch_paths]]
+path = "/etc/sudoers.d/"
+patterns = ["*"]
+policy = "protected"
+```
 
 ---
 

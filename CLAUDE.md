@@ -12,6 +12,8 @@
 6. [Testing](#testing)
 7. [Build & Deploy](#build--deploy)
 8. [Common Tasks for LLMs](#common-tasks-for-llms)
+9. [Glossary](#glossary)
+10. [See Also](#see-also)
 
 ---
 
@@ -145,7 +147,7 @@ Also handles: JSONL log persistence, audit chain appending, JSONL log rotation (
 ### `config.rs`
 
 Deserializes TOML config into `Config` struct. Sections:
-- `general` — `watched_user`/`watched_users`/`watch_all_users`, `min_alert_level`, `log_file`
+- `general` — `watched_user`/`watched_users` (numeric UIDs, not usernames)/`watch_all_users`, `min_alert_level`, `log_file`
 - `slack` — webhook URLs, channel, `min_slack_level`, `heartbeat_interval`
 - `auditd` — `enabled`, `log_path`
 - `network` — `enabled`, `log_path`, `log_prefix`, `source` (auto/journald/file), allowlisted CIDRs/ports
@@ -401,7 +403,8 @@ Config file: `/etc/clawav/config.toml` (TOML format)
 
 ```toml
 [general]
-watched_users = ["openclaw"]  # or watch_all_users = true
+watched_users = ["1000"]  # Numeric UIDs (not usernames!) — matches auditd uid=/auid= fields
+# watch_all_users = true  # Or monitor all users
 min_alert_level = "info"
 log_file = "/var/log/clawav/clawav.log"
 
@@ -686,56 +689,249 @@ All config section structs are public and `Deserialize + Serialize + Default`:
 
 ### Adding a New Scanner
 
-1. Add a function in `src/scanner.rs`:
+Follow this complete template to add a new security check:
+
+**1. Add the scan function in `src/scanner.rs`:**
+
 ```rust
-pub fn scan_my_check() -> ScanResult {
-    // ... check logic ...
-    ScanResult::new("my_check", ScanStatus::Pass, "All good")
-}
-```
+/// Check for unauthorized Docker registries in daemon config.
+pub fn scan_docker_registries() -> ScanResult {
+    let config_path = "/etc/docker/daemon.json";
 
-2. Add it to `SecurityScanner::run_all_scans()`:
-```rust
-results.push(scan_my_check());
-```
+    // Check if Docker config exists
+    let content = match std::fs::read_to_string(config_path) {
+        Ok(c) => c,
+        Err(_) => {
+            return ScanResult::new(
+                "docker_registries",
+                ScanStatus::Pass,
+                "Docker daemon.json not found (Docker may not be installed)",
+            );
+        }
+    };
 
-3. Add tests in the `mod tests` block.
+    // Look for insecure registries
+    let mut issues = Vec::new();
+    if content.contains("insecure-registries") {
+        // Parse and check each registry
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(registries) = json.get("insecure-registries").and_then(|v| v.as_array()) {
+                for reg in registries {
+                    if let Some(r) = reg.as_str() {
+                        issues.push(format!("Insecure registry: {}", r));
+                    }
+                }
+            }
+        }
+    }
 
-### Adding a New Monitored Source
+    // Use run_cmd for external tool checks (30s timeout by default)
+    if let Ok(output) = run_cmd("docker", &["info", "--format", "{{.RegistryConfig.InsecureRegistryCIDRs}}"]) {
+        if output.contains("0.0.0.0/0") {
+            issues.push("All registries allowed as insecure".to_string());
+        }
+    }
 
-1. Create a new module `src/mysource.rs`
-2. Add `mod mysource;` to `main.rs`
-3. Implement an async function that takes `mpsc::Sender<Alert>` and sends alerts:
-```rust
-pub async fn tail_my_source(tx: mpsc::Sender<Alert>) -> Result<()> {
-    loop {
-        // ... read events ...
-        let _ = tx.send(Alert::new(severity, "mysource", &message)).await;
+    if issues.is_empty() {
+        ScanResult::new("docker_registries", ScanStatus::Pass, "No insecure Docker registries configured")
+    } else {
+        ScanResult::new(
+            "docker_registries",
+            ScanStatus::Warn,
+            &format!("Docker registry issues: {}", issues.join("; ")),
+        )
     }
 }
 ```
-4. Spawn it in `async_main()`:
+
+**2. Register it in `SecurityScanner::run_all_scans()`:**
+
 ```rust
-let tx = raw_tx.clone();
-tokio::spawn(async move {
-    if let Err(e) = mysource::tail_my_source(tx).await {
-        eprintln!("mysource error: {}", e);
-    }
-});
+pub fn run_all_scans() -> Vec<ScanResult> {
+    let mut results = vec![
+        scan_firewall(),
+        // ... existing scans ...
+        scan_docker_registries(),  // ← Add your new scan here
+    ];
+    // ...
+    results
+}
 ```
-5. Optionally add a config section in `config.rs` with an `enabled` flag.
+
+**3. Add tests:**
+
+```rust
+#[test]
+fn test_scan_docker_registries_no_docker() {
+    // When Docker config doesn't exist, should pass gracefully
+    let result = scan_docker_registries();
+    // On a system without Docker, this should pass
+    assert!(result.status == ScanStatus::Pass || result.status == ScanStatus::Warn);
+}
+```
+
+**Conventions:**
+- Category names use `snake_case` — appears in alerts as `scan:docker_registries`
+- Return `ScanStatus::Warn` (not `Fail`) when tools are unavailable
+- Use `run_cmd()` for external commands (30s timeout) or `run_cmd_timeout()` for custom
+- Use `run_cmd_with_sudo()` when the command may need elevated privileges
+
+### Adding a New Monitoring Source
+
+Complete example: a monitoring source that watches systemd service failures.
+
+**1. Create `src/systemd_monitor.rs`:**
+
+```rust
+//! Monitors systemd for unexpected service failures.
+
+use anyhow::Result;
+use std::process::Stdio;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::Command;
+use tokio::sync::mpsc;
+
+use crate::alerts::{Alert, Severity};
+
+/// Parse a systemd failure line into an alert.
+pub fn parse_failure_line(line: &str) -> Option<Alert> {
+    // Match lines like: "unit sshd.service entered failed state"
+    if line.contains("entered failed state") || line.contains("Failed with result") {
+        let severity = if line.contains("clawav") || line.contains("auditd") {
+            Severity::Critical  // Security-critical services
+        } else {
+            Severity::Warning
+        };
+        Some(Alert::new(severity, "systemd", &format!("Service failure: {}", line.trim())))
+    } else {
+        None
+    }
+}
+
+/// Tail systemd journal for service failure events.
+pub async fn tail_systemd_failures(tx: mpsc::Sender<Alert>) -> Result<()> {
+    let mut child = Command::new("journalctl")
+        .args(["--system", "-f", "-o", "cat", "--since", "now",
+               "-p", "err",  // Only error-level and above
+               "-t", "systemd"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    let stdout = child.stdout.take()
+        .ok_or_else(|| anyhow::anyhow!("No stdout from journalctl"))?;
+    let mut reader = BufReader::new(stdout).lines();
+
+    let _ = tx.send(Alert::new(
+        Severity::Info, "systemd", "Systemd failure monitor started",
+    )).await;
+
+    while let Some(line) = reader.next_line().await? {
+        if let Some(alert) = parse_failure_line(&line) {
+            let _ = tx.send(alert).await;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_service_failure() {
+        let line = "unit nginx.service entered failed state";
+        let alert = parse_failure_line(line).unwrap();
+        assert_eq!(alert.severity, Severity::Warning);
+        assert_eq!(alert.source, "systemd");
+    }
+
+    #[test]
+    fn test_critical_service_failure() {
+        let line = "unit clawav.service entered failed state";
+        let alert = parse_failure_line(line).unwrap();
+        assert_eq!(alert.severity, Severity::Critical);
+    }
+
+    #[test]
+    fn test_ignores_normal_lines() {
+        assert!(parse_failure_line("Started nginx.service").is_none());
+    }
+}
+```
+
+**2. Register in `src/main.rs`:**
+
+```rust
+mod systemd_monitor;  // Add with other mod declarations
+```
+
+**3. Spawn in `async_main()`:**
+
+```rust
+// Spawn systemd failure monitor
+{
+    let tx = raw_tx.clone();
+    tokio::spawn(async move {
+        if let Err(e) = systemd_monitor::tail_systemd_failures(tx).await {
+            eprintln!("systemd monitor error: {}", e);
+        }
+    });
+}
+```
+
+**4. (Optional) Add a config section in `src/config.rs`:**
+
+```rust
+/// Systemd failure monitoring configuration.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct SystemdMonitorConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+impl Default for SystemdMonitorConfig {
+    fn default() -> Self { Self { enabled: true } }
+}
+```
+
+Then add `#[serde(default)] pub systemd_monitor: SystemdMonitorConfig` to the `Config` struct, and gate the spawn with `if config.systemd_monitor.enabled { ... }`.
 
 ### Adding Sentinel Watch Paths
 
-In config TOML:
+Add entries to the `[sentinel]` section in `/etc/clawav/config.toml`:
+
 ```toml
+# Protect SSH authorized keys from unauthorized modification
 [[sentinel.watch_paths]]
-path = "/path/to/file"
+path = "/home/openclaw/.ssh/authorized_keys"
 patterns = ["*"]
-policy = "protected"  # or "watched"
+policy = "protected"
+
+# Watch Docker daemon config for changes (allow changes, track diffs)
+[[sentinel.watch_paths]]
+path = "/etc/docker/daemon.json"
+patterns = ["*"]
+policy = "watched"
+
+# Protect crontab files from persistence attacks
+[[sentinel.watch_paths]]
+path = "/etc/crontab"
+patterns = ["*"]
+policy = "protected"
+
+# Watch all files in a directory (watches parent dir, matches by prefix)
+[[sentinel.watch_paths]]
+path = "/etc/clawav/"
+patterns = ["*"]
+policy = "watched"
 ```
 
-Or modify the `Default` impl for `SentinelConfig` in `config.rs`.
+**Policy reference:**
+- `"protected"` → On change: quarantine modified file → restore from shadow → Critical alert
+- `"watched"` → On change: update shadow copy → Info alert with diff
+
+To add defaults at compile time, modify `SentinelConfig::default()` in `src/config.rs`.
 
 ### Modifying Alert Behavior
 
@@ -752,3 +948,42 @@ Or modify the `Default` impl for `SentinelConfig` in `config.rs`.
 2. Create `render_my_tab()` function
 3. Add match arm in `ui()` function
 4. Filter alerts by source for the tab content
+
+---
+
+## Glossary
+
+| Term | Definition |
+|------|-----------|
+| **Admin Key** | A 256-bit secret (`OCAV-` + 64 hex chars) generated once at first run, hashed with Argon2, and never stored in plaintext. Required for authenticated admin socket commands, custom binary updates, and uninstall. |
+| **Aggregator** | The central deduplication and rate-limiting stage between alert sources and consumers (TUI, Slack, API, audit chain). Uses fuzzy shape matching to suppress near-duplicate alerts. |
+| **Alert** | The universal event type in ClawAV: a timestamped tuple of severity, source tag, and human-readable message. |
+| **Audit Chain** | A tamper-evident, hash-linked JSONL log where each entry's SHA-256 hash covers its content plus the previous entry's hash, forming a blockchain-style integrity chain. Stored at `/var/log/clawav/audit.chain`. |
+| **Behavioral Analysis** | Hardcoded pattern matching in `behavior.rs` that classifies auditd events into five MITRE ATT&CK-inspired threat categories (data exfiltration, privilege escalation, security tamper, reconnaissance, side-channel). |
+| **clawsudo** | A standalone sudo proxy/gatekeeper binary that evaluates every privileged command against YAML policies before allowing execution. Fail-secure: no rules = deny all. |
+| **Cognitive Files** | AI agent identity files (`SOUL.md`, `AGENTS.md`, `IDENTITY.md`, `TOOLS.md`, `USER.md`, `HEARTBEAT.md`) whose SHA-256 baselines are monitored. Modifications trigger CRITICAL alerts. `MEMORY.md` is a watched (mutable) cognitive file tracked with diffs. |
+| **DLP (Data Loss Prevention)** | Regex-based scanning of outbound API requests through the proxy to detect and block/redact sensitive data (SSNs, credit cards, AWS keys). |
+| **LD_PRELOAD Guard** | `libclawguard.so` — a shared library that intercepts libc syscalls (`execve`, `open`, `openat`, `connect`) at the dynamic linker level, enforcing policy before calls reach the kernel. |
+| **Network Policy** | An allowlist/blocklist engine (`netpolicy.rs`) for outbound connections, supporting wildcard suffix matching on hostnames. |
+| **Quarantine** | The directory (`/etc/clawav/quarantine/`) where modified protected files are preserved for forensic analysis before being restored from their shadow copy. |
+| **SecureClaw** | A pattern engine that loads four JSON regex databases (injection patterns, dangerous commands, privacy rules, supply-chain IOCs) from a vendor directory and applies them to file contents and commands. |
+| **Sentinel** | The real-time file integrity monitor built on Linux inotify. Watches configured paths with two policies: **protected** (quarantine + restore from shadow on change) and **watched** (update shadow, info alert with diff). |
+| **Shadow Copy** | A known-good baseline copy of a watched file, stored in `/etc/clawav/sentinel-shadow/` (for Sentinel) or `/etc/clawav/cognitive-shadow/` (for Cognitive monitoring). Used for diff generation and restoration. |
+| **Swallowed Key Pattern** | ClawAV's core security model: critical files are made immutable (`chattr +i`), the admin key is displayed once and never stored, and the AI agent's capabilities are stripped — making it impossible for software alone to disable the watchdog. |
+
+---
+
+## See Also
+
+| Document | Description |
+|----------|-------------|
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Module dependency graph, data flow diagrams, threat model |
+| [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) | Full config reference — every field, type, default, and TOML example |
+| [`docs/ALERT-PIPELINE.md`](docs/ALERT-PIPELINE.md) | Alert model, pipeline architecture, aggregator tuning, Slack/TUI integration |
+| [`docs/SENTINEL.md`](docs/SENTINEL.md) | Deep dive into real-time file integrity monitoring (inotify, shadow copies, quarantine) |
+| [`docs/SECURITY-SCANNERS.md`](docs/SECURITY-SCANNERS.md) | All 30+ periodic security scanners with pass/warn/fail conditions |
+| [`docs/MONITORING-SOURCES.md`](docs/MONITORING-SOURCES.md) | Every real-time data source (auditd, journald, falco, samhain, etc.) |
+| [`docs/POLICIES.md`](docs/POLICIES.md) | YAML policy writing guide for detection and clawsudo enforcement |
+| [`docs/CLAWSUDO-AND-POLICY.md`](docs/CLAWSUDO-AND-POLICY.md) | clawsudo, admin key, audit chain, API proxy, LD_PRELOAD guard |
+| [`docs/API.md`](docs/API.md) | HTTP REST API endpoints and response formats |
+| [`docs/INSTALL.md`](docs/INSTALL.md) | Installation, hardening steps, CLI commands, recovery procedure |

@@ -150,7 +150,7 @@ ClawAV uses a TOML config file (default: `/etc/clawav/config.toml`). Key section
 
 ```toml
 [general]
-watched_users = ["openclaw"]    # Users to monitor (empty = all)
+watched_users = ["1000"]        # Numeric UIDs to monitor (not usernames! find with: id -u openclaw)
 min_alert_level = "info"        # info | warning | critical
 log_file = "/var/log/clawav/clawav.log"
 
@@ -184,7 +184,7 @@ patterns = ["*"]
 policy = "protected"            # protected = restore + alert; watched = diff + alert
 
 [secureclaw]
-enabled = true
+enabled = false
 vendor_dir = "./vendor/secureclaw/secureclaw/skill/configs"
 
 [scans]

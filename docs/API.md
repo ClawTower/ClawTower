@@ -24,7 +24,7 @@ curl http://localhost:18791/api/status
 {
   "status": "running",
   "uptime_seconds": 3600,
-  "version": "0.3.0",
+  "version": "0.1.9",
   "modules": {
     "auditd": true,
     "network": true,
@@ -130,3 +130,9 @@ Returns 404:
 - Severity values in responses: `INFO`, `WARN`, `CRIT`
 - Timestamps are RFC 3339 format with timezone offset
 - The API server binds to `0.0.0.0:18791` by default — use firewall rules to restrict to LAN (e.g., `192.168.1.0/24`)
+
+## See Also
+
+- [CONFIGURATION.md](CONFIGURATION.md) — Full `[api]` config reference
+- [ALERT-PIPELINE.md](ALERT-PIPELINE.md) — How alerts flow from sources to the API store
+- [ARCHITECTURE.md](ARCHITECTURE.md) — Module dependency graph and data flow

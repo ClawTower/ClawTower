@@ -148,3 +148,11 @@ Any tampering (modified message, deleted entry, reordered entries) breaks the ch
 | **systemd hardening** | Service killing | `Restart=always`, `WatchdogSec=30`, sudoers deny |
 | **DLP proxy** | Secret leakage via API | Regex scanning of outbound LLM requests |
 | **admin key** | Unauthorized management | Argon2 auth, rate limiting, lockout |
+
+## See Also
+
+- [ALERT-PIPELINE.md](ALERT-PIPELINE.md) — Detailed alert model, aggregator tuning, Slack integration
+- [SENTINEL.md](SENTINEL.md) — Real-time file integrity monitoring deep dive
+- [MONITORING-SOURCES.md](MONITORING-SOURCES.md) — Every real-time data source in detail
+- [SECURITY-SCANNERS.md](SECURITY-SCANNERS.md) — All 30+ periodic security scanners
+- [CLAWSUDO-AND-POLICY.md](CLAWSUDO-AND-POLICY.md) — clawsudo, admin key, audit chain, proxy, LD_PRELOAD

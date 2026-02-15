@@ -2,7 +2,7 @@
 
 ClawAV uses a TOML configuration file, typically located at `/etc/clawav/config.toml`.
 
-All sections use `#[serde(default)]` — missing sections or fields gracefully fall back to defaults.
+Most sections use `#[serde(default)]` — missing sections gracefully fall back to defaults. However, **five sections are required** and must be present in the config file: `[general]`, `[slack]`, `[auditd]`, `[network]`, and `[scans]`. All other sections (`[falco]`, `[samhain]`, `[api]`, `[proxy]`, `[policy]`, `[secureclaw]`, `[netpolicy]`, `[ssh]`, `[sentinel]`, `[auto_update]`) are optional and have sensible defaults.
 
 ---
 
@@ -34,8 +34,8 @@ Controls which users are monitored and the global alert threshold.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `watched_user` | `Option<String>` | `None` | Single user to monitor (backward compat; prefer `watched_users`) |
-| `watched_users` | `Vec<String>` | `[]` | List of usernames to monitor |
+| `watched_user` | `Option<String>` | `None` | Single UID to monitor (backward compat; prefer `watched_users`) |
+| `watched_users` | `Vec<String>` | `[]` | List of **numeric UIDs** to monitor (e.g., `["1000"]`, not usernames — these match against auditd's `uid=` and `auid=` fields) |
 | `watch_all_users` | `bool` | `false` | If `true`, monitor all users regardless of `watched_users` |
 | `min_alert_level` | `String` | *(required)* | Minimum severity: `"info"`, `"warning"`, or `"critical"` |
 | `log_file` | `String` | *(required)* | Path to ClawAV's own log file |
@@ -47,11 +47,13 @@ Controls which users are monitored and the global alert threshold.
 
 ```toml
 [general]
-watched_users = ["openclaw"]
+watched_users = ["1000"]   # Numeric UID, not username (find with: id -u openclaw)
 watch_all_users = false
 min_alert_level = "info"
 log_file = "/var/log/clawav/clawav.log"
 ```
+
+> ⚠️ **Common mistake:** Using usernames (e.g., `"openclaw"`) instead of numeric UIDs (e.g., `"1000"`). ClawAV matches against auditd's `uid=` and `auid=` fields, which are numeric. Find your user's UID with `id -u <username>`.
 
 ---
 
@@ -444,11 +446,22 @@ interval = 300
 
 ---
 
+## See Also
+
+- [SENTINEL.md](SENTINEL.md) — Deep dive into `[sentinel]` configuration and behavior
+- [ALERT-PIPELINE.md](ALERT-PIPELINE.md) — How `min_alert_level` and `min_slack_level` affect alert routing
+- [POLICIES.md](POLICIES.md) — YAML policy format for `[policy]` directory
+- [SECURITY-SCANNERS.md](SECURITY-SCANNERS.md) — What the `[scans]` interval controls
+- [CLAWSUDO-AND-POLICY.md](CLAWSUDO-AND-POLICY.md) — `[proxy]` DLP configuration and admin key details
+- [INSTALL.md](INSTALL.md) — Installation steps that create the default config
+
+---
+
 ## Complete Example
 
 ```toml
 [general]
-watched_users = ["openclaw"]
+watched_users = ["1000"]  # Numeric UID (find with: id -u openclaw)
 min_alert_level = "info"
 log_file = "/var/log/clawav/clawav.log"
 

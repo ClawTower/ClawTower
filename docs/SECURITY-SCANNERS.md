@@ -636,25 +636,56 @@ C2 server entries in `supply-chain-ioc.json` are auto-escaped (treated as litera
 1. **Add the function** in `src/scanner.rs`:
 
 ```rust
-pub fn scan_my_new_check() -> ScanResult {
-    // Run system commands with timeout
-    match run_cmd("some-tool", &["--flag"]) {
-        Ok(output) => {
-            if output.contains("bad thing") {
-                ScanResult::new(
-                    "my_check",           // category (used in alert source as "scan:my_check")
-                    ScanStatus::Fail,
-                    "Description of failure",
-                )
-            } else {
-                ScanResult::new("my_check", ScanStatus::Pass, "All good")
-            }
+/// Check that SSH daemon has key-based auth and password auth is disabled.
+pub fn scan_ssh_hardening() -> ScanResult {
+    let sshd_config = "/etc/ssh/sshd_config";
+
+    let content = match std::fs::read_to_string(sshd_config) {
+        Ok(c) => c,
+        Err(_) => {
+            return ScanResult::new(
+                "ssh_hardening",
+                ScanStatus::Pass,
+                "sshd_config not found (SSH may not be installed)",
+            );
         }
-        Err(e) => ScanResult::new(
-            "my_check",
+    };
+
+    let mut issues = Vec::new();
+
+    // Check for password authentication
+    let password_auth_on = content.lines().any(|l| {
+        let l = l.trim();
+        !l.starts_with('#') && l.to_lowercase().contains("passwordauthentication yes")
+    });
+    if password_auth_on {
+        issues.push("PasswordAuthentication is enabled".to_string());
+    }
+
+    // Check for root login
+    let root_login = content.lines().any(|l| {
+        let l = l.trim();
+        !l.starts_with('#') && l.to_lowercase().contains("permitrootlogin yes")
+    });
+    if root_login {
+        issues.push("PermitRootLogin is yes".to_string());
+    }
+
+    // Use run_cmd for runtime checks (30s default timeout)
+    if let Ok(output) = run_cmd("sshd", &["-T"]) {
+        if output.contains("permitemptypasswords yes") {
+            issues.push("Empty passwords permitted".to_string());
+        }
+    }
+
+    if issues.is_empty() {
+        ScanResult::new("ssh_hardening", ScanStatus::Pass, "SSH daemon hardened")
+    } else {
+        ScanResult::new(
+            "ssh_hardening",
             ScanStatus::Warn,
-            &format!("Cannot run check: {}", e),
-        ),
+            &format!("SSH hardening issues: {}", issues.join("; ")),
+        )
     }
 }
 ```
@@ -665,19 +696,52 @@ pub fn scan_my_new_check() -> ScanResult {
 pub fn run_all_scans() -> Vec<ScanResult> {
     let mut results = vec![
         // ... existing scans ...
-        scan_my_new_check(),  // Add here
+        scan_ssh_hardening(),  // Add here
     ];
     // ...
 }
 ```
 
-3. **Add tests**:
+3. **Add tests** (use a testable helper pattern for parsing logic):
 
 ```rust
-#[test]
-fn test_my_new_check_logic() {
-    // Test your parsing logic with known inputs
-    // Use helper functions (like parse_ufw_status) for testability
+/// Parse sshd config content and return issues (testable helper).
+pub fn check_sshd_config(content: &str) -> Vec<String> {
+    let mut issues = Vec::new();
+    if content.lines().any(|l| {
+        let l = l.trim();
+        !l.starts_with('#') && l.to_lowercase().contains("passwordauthentication yes")
+    }) {
+        issues.push("PasswordAuthentication is enabled".to_string());
+    }
+    issues
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sshd_password_auth_enabled() {
+        let config = "Port 22\nPasswordAuthentication yes\n";
+        let issues = check_sshd_config(config);
+        assert!(!issues.is_empty());
+        assert!(issues[0].contains("PasswordAuthentication"));
+    }
+
+    #[test]
+    fn test_sshd_password_auth_disabled() {
+        let config = "Port 22\nPasswordAuthentication no\n";
+        let issues = check_sshd_config(config);
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn test_sshd_commented_line_ignored() {
+        let config = "#PasswordAuthentication yes\nPasswordAuthentication no\n";
+        let issues = check_sshd_config(config);
+        assert!(issues.is_empty());
+    }
 }
 ```
 
@@ -697,3 +761,10 @@ fn test_my_new_check_logic() {
 - Return `Warn` (not `Fail`) when a tool is unavailable — missing tools ≠ security failure
 - For scanners returning multiple results, return `Vec<ScanResult>` and use `results.extend()`
 - Keep individual scan functions quick (<30s) — they run sequentially
+
+## See Also
+
+- [MONITORING-SOURCES.md](MONITORING-SOURCES.md) — Real-time monitoring sources (complementary to periodic scanners)
+- [ALERT-PIPELINE.md](ALERT-PIPELINE.md) — How scan results become alerts and flow through the pipeline
+- [SENTINEL.md](SENTINEL.md) — Real-time file integrity (Sentinel vs Cognitive comparison)
+- [CONFIGURATION.md](CONFIGURATION.md) — `[scans]` interval and `[secureclaw]` config

@@ -166,7 +166,13 @@ After installation, ClawAV provides these commands:
 | `clawav uninstall` | Remove ClawAV (requires admin key) |
 | `clawav logs` | Tail service logs |
 
-See also: [ARCHITECTURE.md](ARCHITECTURE.md) for module overview, [ALERT-PIPELINE.md](ALERT-PIPELINE.md) for alert flow, [SENTINEL.md](SENTINEL.md) for file integrity monitoring.
+## See Also
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) — Module overview and data flow
+- [ALERT-PIPELINE.md](ALERT-PIPELINE.md) — Alert flow and tuning
+- [SENTINEL.md](SENTINEL.md) — File integrity monitoring
+- [CONFIGURATION.md](CONFIGURATION.md) — Full config reference
+- [CLAWSUDO-AND-POLICY.md](CLAWSUDO-AND-POLICY.md) — clawsudo, admin key, LD_PRELOAD guard
 
 ## ⚠️ The Admin Key — SAVE IT!
 

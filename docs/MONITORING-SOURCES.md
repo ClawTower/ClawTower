@@ -442,3 +442,11 @@ mod tests {
 - Use `Seek::SeekFrom::End(0)` when tailing files to skip historical data.
 - For optional tools (like Falco/Samhain), wait for the log file to appear rather than failing.
 - Poll intervals: 500ms for high-frequency sources (auditd, network), 2-30s for low-frequency (samhain, firewall).
+
+## See Also
+
+- [ALERT-PIPELINE.md](ALERT-PIPELINE.md) — How alerts from these sources flow through the aggregator
+- [ARCHITECTURE.md](ARCHITECTURE.md) — Module dependency graph and data flow diagrams
+- [SECURITY-SCANNERS.md](SECURITY-SCANNERS.md) — Periodic scanners (complementary to real-time sources)
+- [SENTINEL.md](SENTINEL.md) — Deep dive into the Sentinel file integrity source
+- [CONFIGURATION.md](CONFIGURATION.md) — Config sections that enable/disable each source
