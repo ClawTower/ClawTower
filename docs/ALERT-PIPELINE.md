@@ -165,10 +165,11 @@ Every component below receives a `raw_tx: mpsc::Sender<Alert>` clone and sends a
 
 ### journald (`src/journald.rs`)
 
-- **Source tag**: `"network"` (for network) or `"ssh"` (for SSH)
+- **Source tag**: `"network"` (for network) or `"ssh"` (for SSH login monitoring)
 - Alternative to file-based network monitoring; reads from systemd journal
 - Auto-detected: prefers journald, falls back to file if unavailable
-- Also monitors SSH login events when `[ssh]` is enabled
+- Also monitors SSH login events when `[ssh]` is enabled in config
+- SSH monitoring classifies: `Accepted` → Info, `Failed password`/`Failed publickey` → Warning, `Invalid user` → Warning
 
 ### falco (`src/falco.rs`)
 
@@ -200,15 +201,37 @@ Every component below receives a `raw_tx: mpsc::Sender<Alert>` clone and sends a
 
 ### policy (`src/policy.rs`)
 
-- **Source tag**: varies (evaluated inline from auditd)
+- **Source tag**: `"policy"` (evaluated inline from auditd)
 - User-defined YAML policy rules evaluated against audit events
 - Config: `[policy]` section — `enabled`, `dir`
 
+### admin (`src/admin.rs`)
+
+- **Source tag**: `"admin"`
+- Unix domain socket for authenticated admin commands
+- Sends Info alerts on successful auth, Critical alerts on auth failures
+- See [CLAWSUDO-AND-POLICY.md](CLAWSUDO-AND-POLICY.md#3-admin-key-system) for details
+
 ### secureclaw (`src/secureclaw.rs`)
 
-- **Source tag**: varies (evaluated inline from auditd and sentinel)
+- **Source tag**: `"secureclaw"` (evaluated inline from auditd and sentinel)
 - Vendor threat pattern database matching (injection, dangerous commands, privacy rules, supply-chain IOCs)
 - Config: `[secureclaw]` section — `enabled`, `vendor_dir`
+
+### proxy (`src/proxy.rs`)
+
+- **Source tag**: `"proxy"`
+- API key vault proxy with DLP scanning on outbound LLM requests
+- Sends alerts when DLP patterns match (credential leakage, PII)
+- Config: `[proxy]` section — `enabled`, `bind`, `port`
+- See [CLAWSUDO-AND-POLICY.md](CLAWSUDO-AND-POLICY.md#5-api-key-proxy) for details
+
+### update (`src/update.rs`)
+
+- **Source tag**: `"update"`
+- Auto-updater that checks for new GitHub releases on a configurable interval
+- Sends alerts when updates are available or applied
+- Config: `[auto_update]` section — `enabled`, `interval`
 
 ---
 
