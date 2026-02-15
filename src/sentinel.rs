@@ -1,0 +1,358 @@
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result};
+use sha2::{Sha256, Digest};
+use tokio::sync::mpsc;
+
+use crate::alerts::{Alert, Severity};
+use crate::config::{SentinelConfig, WatchPolicy};
+use crate::secureclaw::SecureClawEngine;
+
+/// Compute a shadow file path: shadow_dir / hex(sha256(file_path))[..16]
+pub fn shadow_path_for(shadow_dir: &str, file_path: &str) -> PathBuf {
+    let mut hasher = Sha256::new();
+    hasher.update(file_path.as_bytes());
+    let hash = hex::encode(hasher.finalize());
+    let name = format!("{}_{}", &hash[..16], Path::new(file_path)
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".to_string()));
+    PathBuf::from(shadow_dir).join(name)
+}
+
+/// Compute a quarantine path: quarantine_dir / timestamp_filename
+pub fn quarantine_path_for(quarantine_dir: &str, file_path: &str) -> PathBuf {
+    let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    let fname = Path::new(file_path)
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    PathBuf::from(quarantine_dir).join(format!("{}_{}", ts, fname))
+}
+
+/// Generate a simple unified-style diff. Returns empty string if identical.
+pub fn generate_unified_diff(old: &str, new: &str, filename: &str) -> String {
+    if old == new {
+        return String::new();
+    }
+    let old_lines: Vec<&str> = old.lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+    let mut out = String::new();
+    out.push_str(&format!("--- a/{}\n", filename));
+    out.push_str(&format!("+++ b/{}\n", filename));
+
+    // Simple line-by-line diff (not optimal, but functional)
+    let max = old_lines.len().max(new_lines.len());
+    let mut i = 0;
+    while i < max {
+        let ol = old_lines.get(i).copied();
+        let nl = new_lines.get(i).copied();
+        match (ol, nl) {
+            (Some(o), Some(n)) if o == n => {
+                out.push_str(&format!(" {}\n", o));
+            }
+            (Some(o), Some(n)) => {
+                out.push_str(&format!("-{}\n", o));
+                out.push_str(&format!("+{}\n", n));
+            }
+            (Some(o), None) => {
+                out.push_str(&format!("-{}\n", o));
+            }
+            (None, Some(n)) => {
+                out.push_str(&format!("+{}\n", n));
+            }
+            (None, None) => break,
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Check if a file change is likely a log rotation (has .1/.gz/.0 siblings).
+pub fn is_log_rotation(file_path: &str) -> bool {
+    let p = Path::new(file_path);
+    let parent = match p.parent() {
+        Some(d) => d,
+        None => return false,
+    };
+    let fname = match p.file_name() {
+        Some(f) => f.to_string_lossy().to_string(),
+        None => return false,
+    };
+    for suffix in &[".1", ".0", ".gz"] {
+        let sibling = parent.join(format!("{}{}", fname, suffix));
+        if sibling.exists() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Resolve which WatchPolicy applies to a path, if any.
+fn policy_for_path(config: &SentinelConfig, path: &str) -> Option<WatchPolicy> {
+    for wp in &config.watch_paths {
+        if path == wp.path || path.starts_with(&wp.path) {
+            return Some(wp.policy.clone());
+        }
+    }
+    None
+}
+
+pub struct Sentinel {
+    config: SentinelConfig,
+    alert_tx: mpsc::Sender<Alert>,
+    engine: Option<Arc<SecureClawEngine>>,
+}
+
+impl Sentinel {
+    pub fn new(
+        config: SentinelConfig,
+        alert_tx: mpsc::Sender<Alert>,
+        engine: Option<Arc<SecureClawEngine>>,
+    ) -> Result<Self> {
+        // Create shadow and quarantine dirs
+        std::fs::create_dir_all(&config.shadow_dir)
+            .with_context(|| format!("Failed to create shadow dir: {}", config.shadow_dir))?;
+        std::fs::create_dir_all(&config.quarantine_dir)
+            .with_context(|| format!("Failed to create quarantine dir: {}", config.quarantine_dir))?;
+
+        // Initialize shadow copies for all watched paths
+        for wp in &config.watch_paths {
+            let p = Path::new(&wp.path);
+            if p.is_file() {
+                let shadow = shadow_path_for(&config.shadow_dir, &wp.path);
+                if !shadow.exists() {
+                    if let Ok(content) = std::fs::read(&wp.path) {
+                        let _ = std::fs::write(&shadow, &content);
+                    }
+                }
+            }
+        }
+
+        Ok(Self { config, alert_tx, engine })
+    }
+
+    pub async fn handle_change(&self, path: &str) {
+        let file_path = Path::new(path);
+        if !file_path.exists() {
+            return;
+        }
+
+        // Check file size limit
+        if let Ok(meta) = std::fs::metadata(file_path) {
+            if meta.len() > self.config.max_file_size_kb * 1024 {
+                return;
+            }
+        }
+
+        // Log rotation check
+        if is_log_rotation(path) {
+            let _ = self.alert_tx.send(Alert::new(
+                Severity::Info,
+                "sentinel",
+                &format!("Log rotation detected: {}", path),
+            )).await;
+            // Update shadow
+            let shadow = shadow_path_for(&self.config.shadow_dir, path);
+            if let Ok(content) = std::fs::read(file_path) {
+                let _ = std::fs::write(&shadow, &content);
+            }
+            return;
+        }
+
+        // Read current and shadow
+        let current = match std::fs::read_to_string(file_path) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+
+        let shadow = shadow_path_for(&self.config.shadow_dir, path);
+        let previous = std::fs::read_to_string(&shadow).unwrap_or_default();
+
+        if current == previous {
+            return;
+        }
+
+        let fname = file_path.file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.to_string());
+        let diff = generate_unified_diff(&previous, &current, &fname);
+
+        let policy = policy_for_path(&self.config, path);
+
+        // Scan content if enabled
+        let mut threat_found = false;
+        if self.config.scan_content {
+            if let Some(ref engine) = self.engine {
+                let content_matches = engine.check_text(&current);
+                let diff_matches = engine.check_text(&diff);
+                if !content_matches.is_empty() || !diff_matches.is_empty() {
+                    threat_found = true;
+                }
+            }
+        }
+
+        if threat_found || policy == Some(WatchPolicy::Protected) {
+            // Quarantine current, restore from shadow
+            let q_path = quarantine_path_for(&self.config.quarantine_dir, path);
+            let _ = std::fs::copy(file_path, &q_path);
+
+            if shadow.exists() {
+                let _ = std::fs::copy(&shadow, file_path);
+            }
+
+            let msg = if threat_found {
+                format!("THREAT detected in {}, quarantined to {}", path, q_path.display())
+            } else {
+                format!("Protected file {} modified, quarantined to {}, restored from shadow", path, q_path.display())
+            };
+            let _ = self.alert_tx.send(Alert::new(
+                Severity::Critical,
+                "sentinel",
+                &msg,
+            )).await;
+        } else {
+            // Watched policy or unknown — update shadow, info alert
+            let _ = std::fs::write(&shadow, &current);
+            let _ = self.alert_tx.send(Alert::new(
+                Severity::Info,
+                "sentinel",
+                &format!("File changed: {}", path),
+            )).await;
+        }
+    }
+
+    pub async fn run(self) -> Result<()> {
+        use notify::{Config as NotifyConfig, Event, RecommendedWatcher, RecursiveMode, Watcher};
+
+        let (ntx, mut nrx) = mpsc::channel::<Event>(500);
+
+        let mut watcher = RecommendedWatcher::new(
+            move |res: std::result::Result<Event, notify::Error>| {
+                if let Ok(event) = res {
+                    let _ = ntx.blocking_send(event);
+                }
+            },
+            NotifyConfig::default(),
+        )?;
+
+        // Watch parent directories of each configured path
+        let mut watched_dirs = std::collections::HashSet::new();
+        for wp in &self.config.watch_paths {
+            let p = Path::new(&wp.path);
+            let dir = if p.is_dir() { p } else { p.parent().unwrap_or(p) };
+            if watched_dirs.insert(dir.to_path_buf()) {
+                if dir.exists() {
+                    watcher.watch(dir, RecursiveMode::NonRecursive)?;
+                }
+            }
+        }
+
+        // Debounce map
+        let debounce = Duration::from_millis(self.config.debounce_ms);
+        let mut pending: HashMap<String, Instant> = HashMap::new();
+
+        let _ = self.alert_tx.send(Alert::new(
+            Severity::Info,
+            "sentinel",
+            &format!("Sentinel watching {} paths", self.config.watch_paths.len()),
+        )).await;
+
+        loop {
+            tokio::select! {
+                Some(event) = nrx.recv() => {
+                    for path in event.paths {
+                        let path_str = path.to_string_lossy().to_string();
+                        // Only process paths we care about
+                        if policy_for_path(&self.config, &path_str).is_some() {
+                            pending.insert(path_str, Instant::now());
+                        }
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                    let now = Instant::now();
+                    let ready: Vec<String> = pending.iter()
+                        .filter(|(_, ts)| now.duration_since(**ts) >= debounce)
+                        .map(|(p, _)| p.clone())
+                        .collect();
+                    for path in ready {
+                        pending.remove(&path);
+                        self.handle_change(&path).await;
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_shadow_path_uniqueness() {
+        let s1 = shadow_path_for("/tmp/shadow", "/etc/passwd");
+        let s2 = shadow_path_for("/tmp/shadow", "/etc/shadow");
+        assert_ne!(s1, s2);
+        // Same input should give same output
+        let s3 = shadow_path_for("/tmp/shadow", "/etc/passwd");
+        assert_eq!(s1, s3);
+    }
+
+    #[test]
+    fn test_shadow_path_contains_filename() {
+        let s = shadow_path_for("/tmp/shadow", "/home/user/SOUL.md");
+        let name = s.file_name().unwrap().to_string_lossy();
+        assert!(name.contains("SOUL.md"));
+    }
+
+    #[test]
+    fn test_generate_unified_diff_identical() {
+        let diff = generate_unified_diff("hello\nworld\n", "hello\nworld\n", "test.txt");
+        assert!(diff.is_empty());
+    }
+
+    #[test]
+    fn test_generate_unified_diff_with_changes() {
+        let diff = generate_unified_diff("hello\nworld\n", "hello\nearth\n", "test.txt");
+        assert!(!diff.is_empty());
+        assert!(diff.contains("-world"));
+        assert!(diff.contains("+earth"));
+        assert!(diff.contains("--- a/test.txt"));
+        assert!(diff.contains("+++ b/test.txt"));
+    }
+
+    #[test]
+    fn test_is_log_rotation_false() {
+        // A random temp file should not have rotation siblings
+        let tmp = std::env::temp_dir().join("sentinel_test_no_rotation.log");
+        let _ = std::fs::write(&tmp, "test");
+        assert!(!is_log_rotation(&tmp.to_string_lossy()));
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_is_log_rotation_true() {
+        let tmp_dir = std::env::temp_dir().join("sentinel_logrot_test");
+        let _ = std::fs::create_dir_all(&tmp_dir);
+        let log = tmp_dir.join("app.log");
+        let rotated = tmp_dir.join("app.log.1");
+        let _ = std::fs::write(&log, "current");
+        let _ = std::fs::write(&rotated, "old");
+        assert!(is_log_rotation(&log.to_string_lossy()));
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn test_quarantine_path_format() {
+        let q = quarantine_path_for("/tmp/quarantine", "/home/user/SOUL.md");
+        let name = q.file_name().unwrap().to_string_lossy();
+        // Should contain timestamp pattern and original filename
+        assert!(name.contains("SOUL.md"));
+        assert!(name.contains('_'));
+        assert!(q.starts_with("/tmp/quarantine"));
+    }
+}

@@ -7,6 +7,7 @@ mod auditd;
 mod behavior;
 mod cognitive;
 mod config;
+mod sentinel;
 mod falco;
 mod firewall;
 mod journald;
