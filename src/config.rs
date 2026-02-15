@@ -400,6 +400,31 @@ impl Default for SentinelConfig {
                     patterns: vec!["*".to_string()],
                     policy: WatchPolicy::Watched,
                 },
+                WatchPathConfig {
+                    path: "/home/openclaw/.openclaw/workspace/IDENTITY.md".to_string(),
+                    patterns: vec!["*".to_string()],
+                    policy: WatchPolicy::Protected,
+                },
+                WatchPathConfig {
+                    path: "/home/openclaw/.openclaw/workspace/USER.md".to_string(),
+                    patterns: vec!["*".to_string()],
+                    policy: WatchPolicy::Protected,
+                },
+                WatchPathConfig {
+                    path: "/home/openclaw/.openclaw/workspace/HEARTBEAT.md".to_string(),
+                    patterns: vec!["*".to_string()],
+                    policy: WatchPolicy::Watched,
+                },
+                WatchPathConfig {
+                    path: "/home/openclaw/.openclaw/workspace/TOOLS.md".to_string(),
+                    patterns: vec!["*".to_string()],
+                    policy: WatchPolicy::Watched,
+                },
+                WatchPathConfig {
+                    path: "/home/openclaw/.openclaw/workspace/superpowers/skills".to_string(),
+                    patterns: vec!["SKILL.md".to_string()],
+                    policy: WatchPolicy::Protected,
+                },
             ],
             quarantine_dir: default_quarantine_dir(),
             shadow_dir: default_shadow_dir(),
