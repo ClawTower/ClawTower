@@ -34,6 +34,7 @@ rules:
         # Utilities
         - "wttr.in"
         - "api.open-meteo.com"
+        - "claw.local"
     action: critical
 
   # ── Reverse Shell Detection ────────────────────────────────────────────────
@@ -151,9 +152,13 @@ rules:
   - name: "deny-clawav-config-write"
     description: "Detect writes to ClawAV config files"
     match:
-      file_access:
-        - "/etc/clawav/config.toml"
-        - "/etc/clawav/policies/*"
+      command_contains:
+        - "sed -i /etc/clawav/"
+        - "tee /etc/clawav/"
+        - "vim /etc/clawav/"
+        - "nano /etc/clawav/"
+        - "vi /etc/clawav/"
+        - "chattr -i /etc/clawav/"
     action: critical
 
   # ── Privilege Escalation ───────────────────────────────────────────────────
@@ -457,7 +462,4 @@ rules:
     description: "Flag manipulation of scheduled tasks"
     match:
       command: ["at", "atq", "atrm", "batch"]
-      command_contains:
-        - "at "
-        - "batch"
     action: warning
