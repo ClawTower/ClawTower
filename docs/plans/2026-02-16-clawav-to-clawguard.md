@@ -290,3 +290,75 @@ systemctl status clawav  # should say not found
 **Step 6: Install ClawGuard**
 
 Build and install from the renamed repo, or wait for the v0.3.0 GitHub release to use oneshot-install.
+
+---
+
+### Task 5: README restructure
+
+After all renames are done, restructure the README so Quick Start is immediately visible.
+
+**Step 1: Reorganize README.md sections**
+
+Current order:
+1. Header + badges + intro
+2. Table of Contents
+3. What is ClawGuard?
+4. Who It's For
+5. How ClawGuard Fits
+6. Features (very long — 15+ subsections)
+7. Quick Start ← buried way down
+8. Configuration
+9. Usage
+10. Architecture Overview
+11. Contributing
+12. License
+
+New order:
+1. Header + badges + intro paragraph (keep the "swallowed key" explanation — it's the hook)
+2. **Quick Start** ← move up immediately after intro
+3. Table of Contents (for everything below)
+4. Who It's For
+5. How ClawGuard Fits
+6. Features
+7. Configuration
+8. Usage
+9. Architecture Overview
+10. Contributing
+11. License
+
+Remove the separate "What is ClawGuard?" section — the intro paragraph already covers it. Fold any unique content from that section into the intro if needed.
+
+**Step 2: Update Table of Contents**
+
+Regenerate to match new section order. Remove the "What is ClawGuard?" entry.
+
+**Step 3: Update badge URLs**
+
+Change all badge/link URLs from `coltz108/ClawAV` to `coltz108/ClawGuard`:
+
+```markdown
+[![Build](https://img.shields.io/github/actions/workflow/status/coltz108/ClawGuard/ci.yml?branch=main&style=flat-square)](https://github.com/coltz108/ClawGuard/actions)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/coltz108/ClawGuard?style=flat-square)](https://github.com/coltz108/ClawGuard/releases)
+```
+
+Also update the oneshot install URL and git clone URL in Quick Start:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/coltz108/ClawGuard/main/scripts/oneshot-install.sh | sudo bash
+```
+
+```bash
+git clone https://github.com/coltz108/ClawGuard.git
+```
+
+**Step 4: Update CI workflow filenames if referenced**
+
+Check `.github/workflows/` for any references to `ClawAV` in workflow names or badges.
+
+**Step 5: Commit**
+
+```bash
+git add README.md .github/
+git commit -m "docs: restructure README — Quick Start at top, ClawGuard branding"
+```
