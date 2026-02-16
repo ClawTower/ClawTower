@@ -468,6 +468,17 @@ TRAYEOF
         install_sudoers_allowlist "$AGENT_USERNAME"
     fi
 
+    # Service hardening (disable unnecessary network services)
+    log "Applying service hardening..."
+    if systemctl is-active --quiet rpcbind 2>/dev/null; then
+        systemctl stop rpcbind rpcbind.socket 2>/dev/null || true
+        systemctl disable rpcbind rpcbind.socket 2>/dev/null || true
+        systemctl mask rpcbind rpcbind.socket 2>/dev/null || true
+        log "  rpcbind disabled and masked (port 111)"
+    else
+        log "  rpcbind already inactive"
+    fi
+
     # Re-set immutable flags
     log "Re-setting immutable flags..."
     chattr +i /usr/local/bin/clawav
