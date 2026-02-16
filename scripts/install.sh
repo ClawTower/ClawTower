@@ -35,6 +35,12 @@ chmod 755 /usr/local/bin/clawav
 cp "$CONFIG_SRC" /etc/clawav/config.toml
 chmod 644 /etc/clawav/config.toml
 chown -R clawav:clawav /etc/clawav /var/log/clawav /var/run/clawav
+
+# Create config.d directory for user overrides
+mkdir -p /etc/clawav/config.d
+chown root:root /etc/clawav/config.d
+chmod 755 /etc/clawav/config.d
+log "Created /etc/clawav/config.d/ for user overrides"
 # Allow openclaw group to connect to admin socket dir
 chown clawav:openclaw /var/run/clawav
 chmod 0750 /var/run/clawav
@@ -69,7 +75,7 @@ systemctl enable clawav
 
 # ── 4. Set immutable attributes ──────────────────────────────────────────────
 log "Setting immutable attributes (chattr +i)..."
-for f in /usr/local/bin/clawav /etc/clawav/config.toml /etc/systemd/system/clawav.service; do
+for f in /usr/local/bin/clawav /etc/systemd/system/clawav.service; do
     if [[ -f "$f" ]]; then
         chattr +i "$f" && log "  chattr +i $f — OK" || warn "  chattr +i $f — FAILED"
     else
