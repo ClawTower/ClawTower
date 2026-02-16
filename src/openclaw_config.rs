@@ -12,6 +12,7 @@ use crate::scanner::{ScanResult, ScanStatus};
 
 /// A detected configuration drift.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ConfigDrift {
     pub field: String,
     pub baseline_value: String,

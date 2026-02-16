@@ -142,15 +142,13 @@ log "Stopping ClawTower service..."
 sudo systemctl stop clawtower 2>/dev/null || true
 sudo systemctl disable clawtower 2>/dev/null || true
 
-# ── 2. Remove immutable attributes ───────────────────────────────────────────
-log "Removing immutable attributes..."
-sudo chattr -i /usr/local/bin/clawtower 2>/dev/null || true
-sudo chattr -i /usr/local/bin/clawsudo 2>/dev/null || true
-sudo chattr -i /usr/local/bin/clawtower-tray 2>/dev/null || true
-sudo chattr -i /etc/clawtower/admin.key.hash 2>/dev/null || true
-sudo chattr -i /etc/systemd/system/clawtower.service 2>/dev/null || true
-sudo chattr -i /etc/sudoers.d/clawtower-deny 2>/dev/null || true
-sudo chattr -i /etc/sudoers.d/010_pi-nopasswd 2>/dev/null || true
+# ── 2. Remove immutable and append-only attributes ───────────────────────────
+log "Removing file protection attributes..."
+for f in /usr/local/bin/clawtower /usr/local/bin/clawsudo /usr/local/bin/clawtower-tray \
+         /etc/clawtower/admin.key.hash /etc/systemd/system/clawtower.service \
+         /etc/sudoers.d/clawtower-deny /etc/sudoers.d/010_pi-nopasswd; do
+    sudo chattr -ia "$f" 2>/dev/null || true
+done
 
 # ── 3. Remove AppArmor profile ───────────────────────────────────────────────
 log "Removing AppArmor profile..."
@@ -208,9 +206,12 @@ sudo rm -f "$CALLING_HOME/.config/autostart/clawtower-tray.desktop" 2>/dev/null 
 
 # ── 10. Remove binaries ──────────────────────────────────────────────────────
 log "Removing binaries..."
-sudo rm -f /usr/local/bin/clawtower
-sudo rm -f /usr/local/bin/clawsudo
-sudo rm -f /usr/local/bin/clawtower-tray
+for bin in /usr/local/bin/clawtower /usr/local/bin/clawsudo /usr/local/bin/clawtower-tray; do
+    if [[ -f "$bin" ]]; then
+        sudo chattr -ia "$bin" 2>/dev/null || true
+        sudo rm -f "$bin" || warn "Could not remove $bin — may need manual removal"
+    fi
+done
 
 # ── 11. Warn about quarantined files ──────────────────────────────────────────
 if [[ -d /etc/clawtower/quarantine ]] && [[ -n "$(ls -A /etc/clawtower/quarantine 2>/dev/null)" ]]; then

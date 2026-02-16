@@ -19,6 +19,7 @@ use tokio::sync::mpsc;
 /// Recommended auditd rules for ClawTower monitoring.
 ///
 /// Install these via `auditctl` or drop into `/etc/audit/rules.d/clawtower.rules`.
+#[allow(dead_code)]
 pub const RECOMMENDED_AUDIT_RULES: &[&str] = &[
     // Detect immutable-flag removal on protected files
     "-w /usr/bin/chattr -p x -k clawtower-tamper",

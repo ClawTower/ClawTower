@@ -16,10 +16,10 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            artifact: clawav-x86_64-linux
+            artifact: clawtower-x86_64-linux
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            artifact: clawav-aarch64-linux
+            artifact: clawtower-aarch64-linux
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -54,13 +54,13 @@ jobs:
 
       - name: Build tray binary (x86_64 native)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: cargo build --release --target ${{ matrix.target }} --features tray --bin clawav-tray || echo "::warning::Tray build failed (optional)"
+        run: cargo build --release --target ${{ matrix.target }} --features tray --bin clawtower-tray || echo "::warning::Tray build failed (optional)"
 
       - name: Build tray binary (aarch64 via cross)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           if command -v cross &>/dev/null; then
-            cross build --release --target ${{ matrix.target }} --features tray --bin clawav-tray || echo "::warning::Tray cross-build failed (optional)"
+            cross build --release --target ${{ matrix.target }} --features tray --bin clawtower-tray || echo "::warning::Tray cross-build failed (optional)"
           else
             echo "::warning::cross not available, skipping aarch64 tray build"
           fi
@@ -68,11 +68,11 @@ jobs:
       - name: Package binaries
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/clawav dist/${{ matrix.artifact }}
+          cp target/${{ matrix.target }}/release/clawtower dist/${{ matrix.artifact }}
           cp target/${{ matrix.target }}/release/clawsudo dist/clawsudo-${{ matrix.target == 'aarch64-unknown-linux-gnu' && 'aarch64' || 'x86_64' }}-linux
           # Tray binary is optional — only include if it built
-          if [[ -f target/${{ matrix.target }}/release/clawav-tray ]]; then
-            cp target/${{ matrix.target }}/release/clawav-tray dist/clawav-tray-${{ matrix.target == 'aarch64-unknown-linux-gnu' && 'aarch64' || 'x86_64' }}-linux
+          if [[ -f target/${{ matrix.target }}/release/clawtower-tray ]]; then
+            cp target/${{ matrix.target }}/release/clawtower-tray dist/clawtower-tray-${{ matrix.target == 'aarch64-unknown-linux-gnu' && 'aarch64' || 'x86_64' }}-linux
           fi
           chmod +x dist/*
 
