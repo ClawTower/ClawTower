@@ -28,6 +28,15 @@ Quick map to every doc in this project. Start with what you need.
 | [CLAWSUDO-AND-POLICY.md](CLAWSUDO-AND-POLICY.md) | clawsudo gatekeeper, admin key, audit chain, API proxy, LD_PRELOAD guard |
 | [API.md](API.md) | HTTP REST API endpoints and response formats |
 
+## Operations & Tuning
+
+| Document | What's in it |
+|----------|-------------|
+| [DAY1-OPERATIONS.md](DAY1-OPERATIONS.md) | First-day setup checklist, common tasks, troubleshooting |
+| [NOISE-ANALYSIS.md](NOISE-ANALYSIS.md) | Analysis of 18h production logs — alert volumes, noise sources, signal quality |
+| [TUNING.md](TUNING.md) | Tuning guide — reducing noise, adjusting thresholds, filter recipes |
+| [POC-RESULTS.md](POC-RESULTS.md) | Attack simulation POC results — 10 tests, 90% detection rate |
+
 ## For AI Agents / Contributors
 
 | Document | What's in it |
