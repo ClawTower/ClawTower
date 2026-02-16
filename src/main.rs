@@ -35,6 +35,7 @@ mod auditd;
 mod behavior;
 mod cognitive;
 mod config;
+mod config_merge;
 mod sentinel;
 mod falco;
 mod firewall;
