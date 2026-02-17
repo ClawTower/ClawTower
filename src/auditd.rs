@@ -34,6 +34,8 @@ pub const RECOMMENDED_AUDIT_RULES: &[&str] = &[
     "-w /home/openclaw/.ssh/id_ed25519 -p r -k clawtower_cred_read",
     "-w /home/openclaw/.ssh/id_rsa -p r -k clawtower_cred_read",
     "-w /home/openclaw/.openclaw/gateway.yaml -p r -k clawtower_cred_read",
+    // Network connect() monitoring for watched user (T6.1 — outbound escape detection)
+    "-a always,exit -F arch=b64 -S connect -F uid=1000 -F success=1 -k clawtower_net_connect",
 ];
 
 use crate::alerts::{Alert, Severity};
@@ -368,6 +370,20 @@ pub fn check_tamper_event(event: &ParsedEvent) -> Option<Alert> {
                 Severity::Info,
                 "auditd:cred_read",
                 &format!("🔑 Credential access (expected): {} by {}", detail, exe),
+            ));
+        }
+    }
+
+    // Network connect() detection via auditd (T6.1)
+    if line.contains("key=\"clawtower_net_connect\"") || line.contains("key=clawtower_net_connect") {
+        let exe = extract_field(line, "exe").unwrap_or("unknown");
+        // Skip localhost connections and known-safe processes
+        let is_safe = exe.contains("clawtower") || exe.contains("systemd") || exe.contains("dbus");
+        if !is_safe {
+            return Some(Alert::new(
+                Severity::Warning,
+                "auditd:net_connect",
+                &format!("🌐 Outbound connect() by {}", exe),
             ));
         }
     }
@@ -1146,6 +1162,212 @@ mod tests {
         assert!(alert.is_some(), "connect() by node should trigger alert");
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // SOCKADDR parsing tests
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_parse_sockaddr_ipv4() {
+        // AF_INET (02 00), port 80 (00 50), IP 93.184.216.34 (5D B8 D8 22)
+        let saddr = "020000505DB8D82200000000000000000000";
+        let result = parse_sockaddr(saddr).unwrap();
+        assert_eq!(result.family, 2);
+        assert_eq!(result.port, 80);
+        assert_eq!(result.ip, "93.184.216.34");
+    }
+
+    #[test]
+    fn test_parse_sockaddr_ipv4_https() {
+        // AF_INET (02 00), port 443 (01 BB), IP 1.2.3.4
+        let saddr = "020001BB01020304";
+        let result = parse_sockaddr(saddr).unwrap();
+        assert_eq!(result.port, 443);
+        assert_eq!(result.ip, "1.2.3.4");
+    }
+
+    #[test]
+    fn test_parse_sockaddr_ipv6_loopback() {
+        // AF_INET6 (0A 00), port 8080 (1F 90), flow 0, ::1
+        let saddr = "0A001F9000000000000000000000000000000000000000010000";
+        let result = parse_sockaddr(saddr).unwrap();
+        assert_eq!(result.family, 10);
+        assert_eq!(result.port, 8080);
+        assert_eq!(result.ip, "::1");
+    }
+
+    #[test]
+    fn test_parse_sockaddr_unix_ignored() {
+        // AF_UNIX (01 00)
+        let saddr = "01002F746D702F736F636B";
+        assert!(parse_sockaddr(saddr).is_none());
+    }
+
+    #[test]
+    fn test_parse_sockaddr_netlink_ignored() {
+        // AF_NETLINK (10 00)
+        let saddr = "100000000000000000000000";
+        assert!(parse_sockaddr(saddr).is_none());
+    }
+
+    #[test]
+    fn test_parse_sockaddr_too_short() {
+        assert!(parse_sockaddr("0200").is_none()); // AF_INET but no port/addr
+        assert!(parse_sockaddr("").is_none());
+    }
+
+    #[test]
+    fn test_parse_sockaddr_invalid_hex() {
+        assert!(parse_sockaddr("ZZZZ").is_none());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // is_local_or_loopback tests
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_loopback_ipv4() {
+        assert!(is_local_or_loopback("127.0.0.1"));
+        assert!(is_local_or_loopback("127.0.1.1"));
+    }
+
+    #[test]
+    fn test_private_lan_ipv4() {
+        assert!(is_local_or_loopback("10.0.0.1"));
+        assert!(is_local_or_loopback("172.16.0.1"));
+        assert!(is_local_or_loopback("192.168.1.1"));
+    }
+
+    #[test]
+    fn test_public_ipv4_not_local() {
+        assert!(!is_local_or_loopback("8.8.8.8"));
+        assert!(!is_local_or_loopback("93.184.216.34"));
+    }
+
+    #[test]
+    fn test_unspecified_is_local() {
+        assert!(is_local_or_loopback("0.0.0.0"));
+        assert!(is_local_or_loopback("::"));
+    }
+
+    #[test]
+    fn test_loopback_ipv6() {
+        assert!(is_local_or_loopback("::1"));
+    }
+
+    #[test]
+    fn test_link_local_ipv4() {
+        assert!(is_local_or_loopback("169.254.1.1"));
+    }
+
+    #[test]
+    fn test_link_local_ipv6() {
+        assert!(is_local_or_loopback("fe80::1"));
+    }
+
+    #[test]
+    fn test_unique_local_ipv6() {
+        assert!(is_local_or_loopback("fd00::1"));
+    }
+
+    #[test]
+    fn test_public_ipv6_not_local() {
+        assert!(!is_local_or_loopback("2001:db8::1"));
+    }
+
+    #[test]
+    fn test_invalid_ip_not_local() {
+        assert!(!is_local_or_loopback("not-an-ip"));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // extract_audit_id tests
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_extract_audit_id() {
+        let line = r#"type=SYSCALL msg=audit(1707849600.123:456): arch=c00000b7"#;
+        assert_eq!(extract_audit_id(line), Some("1707849600.123:456".to_string()));
+    }
+
+    #[test]
+    fn test_extract_audit_id_missing() {
+        assert_eq!(extract_audit_id("no audit id here"), None);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // ConnectCorrelator tests
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_correlator_basic() {
+        let mut c = ConnectCorrelator::new();
+        let event = ParsedEvent {
+            syscall_name: "connect".to_string(),
+            command: None,
+            args: vec![],
+            file_path: None,
+            success: true,
+            raw: "test".to_string(),
+            actor: Actor::Agent,
+            ppid_exe: None,
+        };
+        c.record_connect("123:456".to_string(), event, "/usr/bin/curl".to_string());
+        let sa = SockAddr { ip: "1.2.3.4".to_string(), port: 443, family: 2 };
+        let result = c.complete_with_sockaddr("123:456", sa);
+        assert!(result.is_some());
+        let (_, exe, sockaddr) = result.unwrap();
+        assert_eq!(exe, "/usr/bin/curl");
+        assert_eq!(sockaddr.ip, "1.2.3.4");
+    }
+
+    #[test]
+    fn test_correlator_no_match() {
+        let mut c = ConnectCorrelator::new();
+        let sa = SockAddr { ip: "1.2.3.4".to_string(), port: 443, family: 2 };
+        assert!(c.complete_with_sockaddr("999:999", sa).is_none());
+    }
+
+    #[test]
+    fn test_correlator_eviction() {
+        let mut c = ConnectCorrelator::new();
+        // Fill past 100 entries
+        for i in 0..105 {
+            let event = ParsedEvent {
+                syscall_name: "connect".to_string(),
+                command: None,
+                args: vec![],
+                file_path: None,
+                success: true,
+                raw: "test".to_string(),
+                actor: Actor::Agent,
+                ppid_exe: None,
+            };
+            c.record_connect(format!("{}:0", i), event, "test".to_string());
+        }
+        // After eviction (clear at >100), only entries 101-104 remain
+        let sa = SockAddr { ip: "1.2.3.4".to_string(), port: 80, family: 2 };
+        // Entry "0:0" should be gone
+        assert!(c.complete_with_sockaddr("0:0", sa).is_none());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // SOCKADDR event parsing in parse_to_event
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_sockaddr_parsed_as_event() {
+        let line = r#"type=SOCKADDR msg=audit(1707849600.123:456): saddr=020001BB08080808"#;
+        let event = parse_to_event(line, None).unwrap();
+        assert_eq!(event.syscall_name, "_sockaddr");
+        assert_eq!(event.file_path.as_deref(), Some("8.8.8.8:443"));
+    }
+
+    #[test]
+    fn test_sockaddr_unix_not_parsed() {
+        let line = r#"type=SOCKADDR msg=audit(1707849600.123:456): saddr=01002F746D70"#;
+        assert!(parse_to_event(line, None).is_none());
+    }
+
     #[test]
     fn test_connect_by_curl_not_double_flagged() {
         // curl is already caught by behavior engine — connect() check skips it
@@ -1162,5 +1384,15 @@ mod tests {
         let alert = check_tamper_event(&event);
         // curl is NOT in NET_SUSPICIOUS_EXES (already handled by behavior engine)
         assert!(alert.is_none(), "curl connect() should not double-flag");
+    }
+
+    #[test]
+    fn test_connect_audit_key_detected() {
+        let line = r#"type=SYSCALL msg=audit(1234567890.123:456): arch=c00000b7 syscall=203 success=yes exit=0 a0=3 a1=7fff123 a2=10 a3=0 items=0 ppid=1234 pid=5678 auid=1000 uid=1000 gid=1000 euid=1000 suid=1000 fsuid=1000 egid=1000 sgid=1000 fsgid=1000 tty=(none) ses=1 comm="curl" exe="/usr/bin/curl" key="clawtower_net_connect""#;
+        let watched_users = vec!["1000".to_string()];
+        let alert = parse_audit_line(line, &watched_users);
+        assert!(alert.is_some(), "connect() with clawtower_net_connect key should trigger alert");
+        let alert = alert.unwrap();
+        assert!(alert.source.contains("net_connect"));
     }
 }
