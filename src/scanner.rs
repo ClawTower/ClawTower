@@ -698,10 +698,9 @@ pub fn scan_environment_variables() -> ScanResult {
             issues.push(format!("Debug mode enabled: {}", key));
         }
         // Check for encoded credentials in env
-        if key.contains("KEY") || key.contains("SECRET") || key.contains("TOKEN") {
-            if value.len() > 20 && value.chars().all(|c| c.is_ascii_alphanumeric() || c == '=' || c == '+' || c == '/') {
+        if (key.contains("KEY") || key.contains("SECRET") || key.contains("TOKEN"))
+            && value.len() > 20 && value.chars().all(|c| c.is_ascii_alphanumeric() || c == '=' || c == '+' || c == '/') {
                 issues.push(format!("Potential credential in environment: {}", key));
-            }
         }
     }
 
@@ -760,18 +759,17 @@ pub fn scan_ld_preload_persistence() -> ScanResult {
                 if trimmed.starts_with('#') {
                     continue;
                 }
-                if trimmed.contains("LD_PRELOAD=") || trimmed.contains("export LD_PRELOAD") {
-                    if !trimmed.contains(CLAWTOWER_GUARD_PATH)
-                        && !trimmed.contains("clawguard")
-                        && !trimmed.contains("clawtower")
-                    {
-                        issues.push(format!(
-                            "{}:{}: {}",
-                            path,
-                            lineno + 1,
-                            trimmed
-                        ));
-                    }
+                if (trimmed.contains("LD_PRELOAD=") || trimmed.contains("export LD_PRELOAD"))
+                    && !trimmed.contains(CLAWTOWER_GUARD_PATH)
+                    && !trimmed.contains("clawguard")
+                    && !trimmed.contains("clawtower")
+                {
+                    issues.push(format!(
+                        "{}:{}: {}",
+                        path,
+                        lineno + 1,
+                        trimmed
+                    ));
                 }
             }
         }
