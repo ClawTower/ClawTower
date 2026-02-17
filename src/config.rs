@@ -615,6 +615,12 @@ impl Default for SentinelConfig {
                     patterns: vec!["*".to_string()],
                     policy: WatchPolicy::Watched,
                 },
+                // Download directory monitoring for indirect injection (Tinman II-*)
+                WatchPathConfig {
+                    path: "/home/openclaw/Downloads".to_string(),
+                    patterns: vec!["*.md".to_string(), "*.txt".to_string(), "*.json".to_string(), "*.html".to_string()],
+                    policy: WatchPolicy::Watched,
+                },
             ],
             quarantine_dir: default_quarantine_dir(),
             shadow_dir: default_shadow_dir(),
