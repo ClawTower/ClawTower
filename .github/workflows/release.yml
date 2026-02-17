@@ -51,7 +51,7 @@ jobs:
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           cross build --release --target ${{ matrix.target }}
-          cross build --release --target ${{ matrix.target }} --features tray --bin clawtower-tray
+          # Note: tray binary (ksni/dbus) skipped for aarch64 — dbus cross-compilation is unsupported
 
       - name: Package binaries
         run: |
