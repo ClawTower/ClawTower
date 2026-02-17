@@ -977,91 +977,76 @@ fn apply_field_to_config(config: &mut Config, section: &str, field_name: &str, v
     }
 }
 
-fn render_alerts_tab(f: &mut Frame, area: Rect, app: &App) {
-    let items: Vec<ListItem> = app
-        .alert_store
-        .alerts()
+fn render_alert_list(
+    f: &mut Frame,
+    area: Rect,
+    app: &mut App,
+    tab_index: usize,
+    source_filter: Option<&str>,
+    title: &str,
+) {
+    let alerts = app.alert_store.alerts();
+    let filtered: Vec<&Alert> = alerts
         .iter()
         .rev()
+        .filter(|a| {
+            if let Some(src) = source_filter {
+                if a.source != src {
+                    return false;
+                }
+            }
+            if app.muted_sources.contains(&a.source) {
+                return false;
+            }
+            if !app.search_filter.is_empty() {
+                let haystack = a.to_string().to_lowercase();
+                if !haystack.contains(&app.search_filter.to_lowercase()) {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect();
+
+    let now = chrono::Local::now();
+    let items: Vec<ListItem> = filtered
+        .iter()
         .map(|alert| {
+            let age = now.signed_duration_since(alert.timestamp);
+            let age_str = if age.num_seconds() < 60 {
+                format!("{}s ago", age.num_seconds())
+            } else if age.num_minutes() < 60 {
+                format!("{}m ago", age.num_minutes())
+            } else if age.num_hours() < 24 {
+                format!("{}h ago", age.num_hours())
+            } else {
+                format!("{}d ago", age.num_days())
+            };
+
             let style = match alert.severity {
                 Severity::Critical => Style::default().fg(Color::Red).bold(),
                 Severity::Warning => Style::default().fg(Color::Yellow),
-                Severity::Info => Style::default().fg(Color::Gray),
+                Severity::Info => Style::default().fg(Color::Blue),
             };
-            ListItem::new(alert.to_string()).style(style)
+            ListItem::new(format!(
+                "{} {} [{}] {}",
+                age_str, alert.severity, alert.source, alert.message
+            ))
+            .style(style)
         })
         .collect();
+
+    let count = items.len();
+    let display_title = format!(" {} ({}) ", title, count);
+    let pause_indicator = if app.paused { " ⏸ PAUSED " } else { "" };
+    let full_title = format!("{}{}", display_title, pause_indicator);
 
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(" Alert Feed "));
-    f.render_widget(list, area);
-}
+        .block(Block::default().borders(Borders::ALL).title(full_title))
+        .highlight_style(Style::default().bg(Color::DarkGray).fg(Color::White))
+        .highlight_symbol("▶ ");
 
-fn render_network_tab(f: &mut Frame, area: Rect, app: &App) {
-    let network_alerts: Vec<ListItem> = app
-        .alert_store
-        .alerts()
-        .iter()
-        .rev()
-        .filter(|a| a.source == "network")
-        .map(|alert| {
-            let style = match alert.severity {
-                Severity::Critical => Style::default().fg(Color::Red).bold(),
-                Severity::Warning => Style::default().fg(Color::Yellow),
-                Severity::Info => Style::default().fg(Color::Gray),
-            };
-            ListItem::new(alert.to_string()).style(style)
-        })
-        .collect();
-
-    let list = List::new(network_alerts)
-        .block(Block::default().borders(Borders::ALL).title(" Network Activity "));
-    f.render_widget(list, area);
-}
-
-fn render_falco_tab(f: &mut Frame, area: Rect, app: &App) {
-    let falco_alerts: Vec<ListItem> = app
-        .alert_store
-        .alerts()
-        .iter()
-        .rev()
-        .filter(|a| a.source == "falco")
-        .map(|alert| {
-            let style = match alert.severity {
-                Severity::Critical => Style::default().fg(Color::Red).bold(),
-                Severity::Warning => Style::default().fg(Color::Yellow),
-                Severity::Info => Style::default().fg(Color::Gray),
-            };
-            ListItem::new(alert.to_string()).style(style)
-        })
-        .collect();
-
-    let list = List::new(falco_alerts)
-        .block(Block::default().borders(Borders::ALL).title(" Falco eBPF Alerts "));
-    f.render_widget(list, area);
-}
-
-fn render_fim_tab(f: &mut Frame, area: Rect, app: &App) {
-    let fim_alerts: Vec<ListItem> = app
-        .alert_store
-        .alerts()
-        .iter()
-        .rev()
-        .filter(|a| a.source == "samhain")
-        .map(|alert| {
-            let style = match alert.severity {
-                Severity::Critical => Style::default().fg(Color::Red).bold(),
-                Severity::Warning => Style::default().fg(Color::Yellow),
-                Severity::Info => Style::default().fg(Color::Gray),
-            };
-            ListItem::new(alert.to_string()).style(style)
-        })
-        .collect();
-
-    let list = List::new(fim_alerts)
-        .block(Block::default().borders(Borders::ALL).title(" File Integrity (Samhain) "));
-    f.render_widget(list, area);
+    f.render_stateful_widget(list, area, &mut app.list_states[tab_index]);
 }
 
 fn render_system_tab(f: &mut Frame, area: Rect, app: &App) {
@@ -1069,7 +1054,7 @@ fn render_system_tab(f: &mut Frame, area: Rect, app: &App) {
     let warn_count = app.alert_store.count_by_severity(&Severity::Warning);
     let crit_count = app.alert_store.count_by_severity(&Severity::Critical);
 
-    let text = vec![
+    let mut text = vec![
         Line::from(vec![
             Span::styled(format!("ClawTower v{}", env!("CARGO_PKG_VERSION")), Style::default().fg(Color::Cyan).bold()),
         ]),
@@ -1080,7 +1065,7 @@ fn render_system_tab(f: &mut Frame, area: Rect, app: &App) {
         ]),
         Line::from(""),
         Line::from(vec![
-            Span::styled(format!("  ℹ️  Info:     {}", info_count), Style::default().fg(Color::Gray)),
+            Span::styled(format!("  ℹ️  Info:     {}", info_count), Style::default().fg(Color::Blue)),
         ]),
         Line::from(vec![
             Span::styled(format!("  ⚠️  Warnings: {}", warn_count), Style::default().fg(Color::Yellow)),
@@ -1090,13 +1075,30 @@ fn render_system_tab(f: &mut Frame, area: Rect, app: &App) {
         ]),
         Line::from(""),
         Line::from(vec![
-            Span::raw("Press "),
-            Span::styled("Tab", Style::default().fg(Color::Cyan)),
-            Span::raw(" to switch panels, "),
-            Span::styled("q", Style::default().fg(Color::Cyan)),
-            Span::raw(" to quit"),
+            Span::raw("Feed: "),
+            if app.paused {
+                Span::styled("⏸ PAUSED", Style::default().fg(Color::Yellow).bold())
+            } else {
+                Span::styled("▶ LIVE", Style::default().fg(Color::Green))
+            },
         ]),
     ];
+
+    if !app.muted_sources.is_empty() {
+        text.push(Line::from(vec![
+            Span::styled("Muted: ", Style::default().fg(Color::DarkGray)),
+            Span::raw(app.muted_sources.join(", ")),
+        ]));
+    }
+
+    text.push(Line::from(""));
+    text.push(Line::from(vec![
+        Span::raw("Press "),
+        Span::styled("Tab", Style::default().fg(Color::Cyan)),
+        Span::raw(" to switch panels, "),
+        Span::styled("q", Style::default().fg(Color::Cyan)),
+        Span::raw(" to quit"),
+    ]));
 
     let paragraph = Paragraph::new(text)
         .block(Block::default().borders(Borders::ALL).title(" System Status "));
@@ -1189,31 +1191,156 @@ fn render_config_tab(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(fields_list, chunks[1]);
 }
 
+fn render_detail_view(f: &mut Frame, area: Rect, alert: &Alert) {
+    let now = chrono::Local::now();
+    let age = now.signed_duration_since(alert.timestamp);
+    let age_str = if age.num_seconds() < 60 {
+        format!("{} seconds ago", age.num_seconds())
+    } else if age.num_minutes() < 60 {
+        format!("{} minutes ago", age.num_minutes())
+    } else if age.num_hours() < 24 {
+        format!("{} hours ago", age.num_hours())
+    } else {
+        format!("{} days ago", age.num_days())
+    };
+
+    let severity_style = match alert.severity {
+        Severity::Critical => Style::default().fg(Color::Red).bold(),
+        Severity::Warning => Style::default().fg(Color::Yellow).bold(),
+        Severity::Info => Style::default().fg(Color::Blue).bold(),
+    };
+
+    let mut text = vec![
+        Line::from(vec![
+            Span::styled(format!(" {} ", alert.severity), severity_style),
+            Span::raw("  "),
+            Span::styled(alert.source.as_str(), Style::default().fg(Color::Cyan).bold()),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Timestamp: ", Style::default().fg(Color::DarkGray)),
+            Span::raw(alert.timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string()),
+            Span::styled(format!("  ({})", age_str), Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Source: ", Style::default().fg(Color::DarkGray)),
+            Span::raw(alert.source.as_str()),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Severity: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}", alert.severity), severity_style),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("Message:", Style::default().fg(Color::DarkGray))),
+        Line::from(""),
+    ];
+
+    // Word-wrap the message to fit the area
+    let wrap_width = area.width.saturating_sub(4) as usize;
+    if wrap_width > 0 {
+        let msg_lines: Vec<Line> = alert
+            .message
+            .chars()
+            .collect::<Vec<_>>()
+            .chunks(wrap_width)
+            .map(|chunk| Line::from(format!("  {}", chunk.iter().collect::<String>())))
+            .collect();
+        text.extend(msg_lines);
+    }
+
+    let paragraph = Paragraph::new(text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Alert Detail ")
+                .border_style(Style::default().fg(Color::Cyan)),
+        );
+    f.render_widget(paragraph, area);
+}
+
 fn ui(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(0)])
+        .constraints([
+            Constraint::Length(3),  // tab bar
+            Constraint::Min(0),    // content
+            Constraint::Length(1), // footer
+        ])
         .split(f.area());
 
-    // Tab bar
-    let titles: Vec<Line> = app.tab_titles.iter().map(|t| Line::from(t.as_str())).collect();
-    let tabs = Tabs::new(titles)
+    // Tab bar with dynamic counts
+    let alerts = app.alert_store.alerts();
+    let total = alerts.len();
+    let net_count = alerts.iter().filter(|a| a.source == "network").count();
+    let falco_count = alerts.iter().filter(|a| a.source == "falco").count();
+    let fim_count = alerts.iter().filter(|a| a.source == "samhain").count();
+
+    let tab_titles: Vec<Line> = vec![
+        Line::from(format!("Alerts ({})", total)),
+        Line::from(format!("Network ({})", net_count)),
+        Line::from(format!("Falco ({})", falco_count)),
+        Line::from(format!("FIM ({})", fim_count)),
+        Line::from("System".to_string()),
+        Line::from("Config".to_string()),
+    ];
+
+    let tabs = Tabs::new(tab_titles)
         .block(Block::default().borders(Borders::ALL).title(" 🛡️ ClawTower "))
         .select(app.selected_tab)
         .style(Style::default().fg(Color::White))
         .highlight_style(Style::default().fg(Color::Cyan).bold());
     f.render_widget(tabs, chunks[0]);
 
-    // Content area
-    match app.selected_tab {
-        0 => render_alert_list(f, chunks[1], app, 0, None, "Alert Feed"),
-        1 => render_alert_list(f, chunks[1], app, 1, Some("network"), "Network Activity"),
-        2 => render_alert_list(f, chunks[1], app, 2, Some("falco"), "Falco eBPF Alerts"),
-        3 => render_alert_list(f, chunks[1], app, 3, Some("samhain"), "File Integrity"),
-        4 => render_system_tab(f, chunks[1], app),
-        5 => render_config_tab(f, chunks[1], app),
-        _ => {}
+    // Content area — detail view overrides tab content
+    if let Some(ref alert) = app.detail_alert.clone() {
+        render_detail_view(f, chunks[1], &alert);
+    } else {
+        match app.selected_tab {
+            0 => render_alert_list(f, chunks[1], app, 0, None, "Alert Feed"),
+            1 => render_alert_list(f, chunks[1], app, 1, Some("network"), "Network Activity"),
+            2 => render_alert_list(f, chunks[1], app, 2, Some("falco"), "Falco eBPF Alerts"),
+            3 => render_alert_list(f, chunks[1], app, 3, Some("samhain"), "File Integrity"),
+            4 => render_system_tab(f, chunks[1], app),
+            5 => render_config_tab(f, chunks[1], app),
+            _ => {}
+        }
     }
+
+    // Footer / status bar
+    let footer_text = if app.search_active {
+        format!(" 🔍 Search: {}▌  (Enter to apply, Esc to cancel)", app.search_buffer)
+    } else if app.detail_alert.is_some() {
+        " Esc: back │ m: mute source".to_string()
+    } else {
+        match app.selected_tab {
+            0..=3 => {
+                let pause = if app.paused { "Space: resume" } else { "Space: pause" };
+                let filter = if !app.search_filter.is_empty() {
+                    format!(" │ Filter: \"{}\" (Esc clears)", app.search_filter)
+                } else {
+                    String::new()
+                };
+                format!(" Tab: switch │ ↑↓: scroll │ Enter: detail │ /: search │ {}{} │ q: quit", pause, filter)
+            }
+            4 => " Tab: switch │ q: quit".to_string(),
+            5 => {
+                if app.config_editing {
+                    " Enter: confirm │ Esc: cancel".to_string()
+                } else if app.config_focus == ConfigFocus::Fields {
+                    " ↑↓: navigate │ Enter: edit │ Backspace: sidebar │ Ctrl+S: save │ Tab: switch".to_string()
+                } else {
+                    " ↑↓: sections │ Enter: fields │ ←→: tabs │ Tab: switch │ q: quit".to_string()
+                }
+            }
+            _ => String::new(),
+        }
+    };
+
+    let footer = Paragraph::new(Line::from(footer_text))
+        .style(Style::default().fg(Color::DarkGray).bg(Color::Black));
+    f.render_widget(footer, chunks[2]);
 
     // Sudo popup overlay
     if let Some(ref popup) = app.sudo_popup {
