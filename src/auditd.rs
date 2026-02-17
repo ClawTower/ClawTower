@@ -34,6 +34,10 @@ pub const RECOMMENDED_AUDIT_RULES: &[&str] = &[
     "-w /home/openclaw/.ssh/id_ed25519 -p r -k clawtower_cred_read",
     "-w /home/openclaw/.ssh/id_rsa -p r -k clawtower_cred_read",
     "-w /home/openclaw/.openclaw/gateway.yaml -p r -k clawtower_cred_read",
+    // System credential files (Flag 7 — catches interpreter-based reads)
+    "-w /etc/shadow -p r -k clawtower_cred_read",
+    "-w /etc/gshadow -p r -k clawtower_cred_read",
+    "-w /etc/sudoers -p r -k clawtower_cred_read",
     // Network connect() monitoring for watched user (T6.1 — outbound escape detection)
     "-a always,exit -F arch=b64 -S connect -F uid=1000 -F success=1 -k clawtower_net_connect",
 ];
@@ -357,19 +361,22 @@ pub fn check_tamper_event(event: &ParsedEvent) -> Option<Alert> {
             .or(event.command.as_deref())
             .unwrap_or(&line[..line.len().min(200)]);
         let exe = extract_field(line, "exe").unwrap_or("unknown");
-        // Allowlist: OpenClaw itself legitimately reads auth-profiles.json and gateway.yaml
-        let is_openclaw = exe.contains("openclaw") || exe.contains("/usr/bin/node") || exe.contains("/usr/local/bin/node");
+        // Allowlist: Only the OpenClaw gateway process itself (comm=openclaw-gateway)
+        // Note: Node is NOT blanket-allowlisted — a compromised agent using Node
+        // to read credentials must still trigger a Critical alert.
+        let comm = extract_field(line, "comm").unwrap_or("unknown");
+        let is_openclaw = exe.contains("openclaw") || comm.contains("openclaw");
         if !is_openclaw {
             return Some(Alert::new(
                 Severity::Critical,
                 "auditd:cred_read",
-                &format!("🔑 CREDENTIAL READ: {} accessed by {} — possible exfiltration", detail, exe),
+                &format!("🔑 CREDENTIAL READ: {} accessed by {} (comm={}) — possible exfiltration", detail, exe, comm),
             ));
         } else {
             return Some(Alert::new(
                 Severity::Info,
                 "auditd:cred_read",
-                &format!("🔑 Credential access (expected): {} by {}", detail, exe),
+                &format!("🔑 Credential access (expected): {} by {} (comm={})", detail, exe, comm),
             ));
         }
     }

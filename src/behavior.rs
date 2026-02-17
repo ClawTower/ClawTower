@@ -2595,22 +2595,43 @@ mod tests {
     }
 
     #[test]
-    fn test_cred_read_event_openclaw_exe() {
+    fn test_cred_read_event_node_not_openclaw() {
         use crate::auditd::check_tamper_event;
+        // A bare Node process (not OpenClaw gateway) reading creds should be Critical
         let event = ParsedEvent {
             syscall_name: "openat".to_string(),
             command: None,
             args: vec![],
             file_path: Some("/home/openclaw/.openclaw/gateway.yaml".to_string()),
             success: true,
-            raw: r#"type=SYSCALL msg=audit(1707849600.123:456): arch=c00000b7 syscall=56 success=yes exe="/usr/bin/node" key="clawtower_cred_read""#.to_string(),
+            raw: r#"type=SYSCALL msg=audit(1707849600.123:456): arch=c00000b7 syscall=56 success=yes exe="/usr/bin/node" comm="node" key="clawtower_cred_read""#.to_string(),
             actor: Actor::Agent,
             ppid_exe: None,
         };
         let alert = check_tamper_event(&event);
-        assert!(alert.is_some(), "credential read by node should still alert");
+        assert!(alert.is_some(), "credential read by node should alert");
         let alert = alert.unwrap();
-        assert_eq!(alert.severity, Severity::Info, "openclaw/node reads should be Info, not Critical");
+        assert_eq!(alert.severity, Severity::Critical, "non-openclaw node reads should be Critical");
+    }
+
+    #[test]
+    fn test_cred_read_event_openclaw_gateway() {
+        use crate::auditd::check_tamper_event;
+        // The OpenClaw gateway process (comm=openclaw-gateway) should be Info
+        let event = ParsedEvent {
+            syscall_name: "openat".to_string(),
+            command: None,
+            args: vec![],
+            file_path: Some("/home/openclaw/.openclaw/gateway.yaml".to_string()),
+            success: true,
+            raw: r#"type=SYSCALL msg=audit(1707849600.123:456): arch=c00000b7 syscall=56 success=yes exe="/usr/bin/node" comm="openclaw-gateway" key="clawtower_cred_read""#.to_string(),
+            actor: Actor::Agent,
+            ppid_exe: None,
+        };
+        let alert = check_tamper_event(&event);
+        assert!(alert.is_some(), "openclaw gateway cred read should still log");
+        let alert = alert.unwrap();
+        assert_eq!(alert.severity, Severity::Info, "openclaw gateway reads should be Info");
     }
 
     // === T3.3: Safe-host tightening ===

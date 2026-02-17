@@ -22,6 +22,12 @@ cat > "$RULES_FILE" << 'EOF'
 -w /home/openclaw/.ssh/id_rsa -p r -k clawtower_cred_read
 -w /home/openclaw/.openclaw/gateway.yaml -p r -k clawtower_cred_read
 
+# === System credential file monitoring (Flag 7 — RUNTIME ABUSE) ===
+-w /etc/shadow -p r -k clawtower_cred_read
+-w /etc/gshadow -p r -k clawtower_cred_read
+-w /etc/sudoers -p r -k clawtower_cred_read
+-w /etc/sudoers.d/ -p r -k clawtower_cred_read
+
 # === OpenClaw session log monitoring ===
 -w /home/openclaw/.openclaw/agents/main/sessions/ -p r -k openclaw_session_read
 
