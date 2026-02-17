@@ -83,6 +83,32 @@ jobs:
             sha256sum "$f" > "${f}.sha256"
           done
 
+      - name: Sign binaries (Ed25519)
+        if: env.RELEASE_SIGNING_KEY != ''
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          pip install cryptography --quiet
+          python3 - <<'SIGN_EOF'
+          import os, glob
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+          from hashlib import sha256
+
+          key_hex = os.environ["RELEASE_SIGNING_KEY"]
+          priv_key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(key_hex))
+
+          for binary in glob.glob("dist/*"):
+              # Only sign actual binaries (skip .sha256 and .sig files)
+              if binary.endswith(".sha256") or binary.endswith(".sig"):
+                  continue
+              data = open(binary, "rb").read()
+              digest = sha256(data).digest()
+              sig = priv_key.sign(digest)
+              sig_path = binary + ".sig"
+              open(sig_path, "wb").write(sig)
+              print(f"Signed: {binary} -> {sig_path} ({len(sig)} bytes)")
+          SIGN_EOF
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:

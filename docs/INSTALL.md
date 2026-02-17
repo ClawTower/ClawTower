@@ -251,6 +251,51 @@ systemctl daemon-reload
 # Remove kernel.modules_disabled and ptrace_scope from sysctl
 ```
 
+## Release Signing & Key Rotation
+
+ClawTower release binaries are signed with Ed25519. The public key is embedded in the binary at compile time (`src/release-key.pub`), and the auto-updater verifies `.sig` files from GitHub releases before applying updates.
+
+### How It Works
+
+1. CI reads the hex-encoded private key from the `RELEASE_SIGNING_KEY` GitHub secret
+2. Each release binary is hashed (SHA-256), then the hash is signed with Ed25519
+3. The 64-byte `.sig` file is attached to the GitHub release alongside the binary
+4. The updater downloads the `.sig`, verifies against the embedded public key, and refuses to install if verification fails
+
+### Key Rotation Procedure
+
+If the signing key is compromised or needs rotation:
+
+1. **Generate a new Ed25519 keypair:**
+   ```python
+   from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+   from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+   import os
+   priv = Ed25519PrivateKey.generate()
+   pub_bytes = priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+   priv_bytes = priv.private_bytes(
+       Encoding.Raw,
+       cryptography.hazmat.primitives.serialization.PrivateFormat.Raw,
+       cryptography.hazmat.primitives.serialization.NoEncryption()
+   )
+   print("Private (hex, for GitHub secret):", priv_bytes.hex())
+   print("Public (hex):", pub_bytes.hex())
+   open("src/release-key.pub", "wb").write(pub_bytes)
+   ```
+
+2. **Replace `src/release-key.pub`** with the new 32-byte public key
+
+3. **Update the `RELEASE_SIGNING_KEY` secret** in GitHub repo settings with the new hex-encoded private key
+
+4. **Cut a new release** — this is the transition release. Existing installations will:
+   - Download the new binary (verified by SHA-256 checksum)
+   - The old embedded key will fail `.sig` verification, but signature verification is non-blocking for one transition release (warns but proceeds if checksum passes)
+   - After updating, the new binary has the new public key embedded
+
+5. **All subsequent releases** will be fully verified with the new key
+
+> **Important:** The private key must NEVER be committed to the repository. Store it only in GitHub Secrets (`RELEASE_SIGNING_KEY`) as a hex-encoded string.
+
 ## See Also
 
 - [CONFIGURATION.md](CONFIGURATION.md) — Full config reference for every TOML field
