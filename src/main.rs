@@ -29,6 +29,10 @@
 mod admin;
 mod alerts;
 mod aggregator;
+mod capabilities;
+mod correlator;
+mod memory_sentinel;
+mod process_cage;
 mod api;
 mod audit_chain;
 mod auditd;
@@ -48,11 +52,20 @@ mod policy;
 mod proxy;
 mod samhain;
 mod scanner;
+mod forensics;
+mod seccomp;
 mod secureclaw;
 mod slack;
 mod tui;
 mod response;
 mod update;
+
+#[cfg(test)]
+mod integration_tests;
+#[cfg(test)]
+mod adversarial_tests;
+#[cfg(test)]
+mod benchmarks;
 
 use anyhow::Result;
 use config::Config;
