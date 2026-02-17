@@ -69,6 +69,38 @@ rules:
     action: critical
     enforcement: deny
 
+  # ── Identity / Cognitive File Protection ────────────────────────────────────
+  # Block sudo writes to agent identity files. The agent process writes its own
+  # working files (MEMORY.md, TOOLS.md, etc.) as the openclaw user without sudo —
+  # that's normal and allowed. What's NOT normal is using sudo to overwrite the
+  # core identity files or OpenClaw config, which could subvert the agent.
+  - name: "deny-identity-file-tamper"
+    description: "Block sudo writes to agent identity and config files"
+    match:
+      command_contains:
+        - "SOUL.md"
+        - "IDENTITY.md"
+        - "AGENTS.md"
+        - "USER.md"
+        - "/home/openclaw/.openclaw/openclaw.json"
+        - "/home/openclaw/.openclaw/config"
+    action: critical
+    enforcement: deny
+
+  # ── Known Exfiltration Domains via Sudo ────────────────────────────────────
+  - name: "deny-exfil-staging-domains"
+    description: "Block sudo network commands to known exfil staging services"
+    match:
+      command_contains:
+        - "webhook.site"
+        - "ngrok.io"
+        - "ngrok-free.app"
+        - "requestbin.com"
+        - "pipedream.net"
+        - "beeceptor.com"
+    action: critical
+    enforcement: deny
+
   # ── Allowed Commands (checked AFTER denies) ────────────────────────────────
   - name: "allow-apt"
     match:

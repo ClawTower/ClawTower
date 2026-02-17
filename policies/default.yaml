@@ -101,6 +101,8 @@ rules:
         - "**/.ssh/config"
         - "**/.gnupg/**"
         - "**/.kube/config"
+        - "**/.netrc"
+        - "**/.git-credentials"
     action: warning
 
   # ── System Tampering ───────────────────────────────────────────────────────
@@ -470,3 +472,94 @@ rules:
     match:
       command: ["at", "atq", "atrm", "batch"]
     action: warning
+
+  # ── Known Exfiltration Staging Domains ─────────────────────────────────────
+  - name: "block-exfil-staging-domains"
+    description: "Block data sends to known exfiltration staging services"
+    match:
+      command_contains:
+        - "webhook.site"
+        - "ngrok.io"
+        - "ngrok-free.app"
+        - "requestbin.com"
+        - "pipedream.net"
+        - "beeceptor.com"
+        - "hookbin.com"
+        - "burpcollaborator.net"
+        - "interact.sh"
+        - "oastify.com"
+        - "canarytokens.com"
+    action: critical
+
+  # ── Pipe-to-Shell Patterns ─────────────────────────────────────────────────
+  - name: "detect-pipe-to-shell"
+    description: "Flag download-and-execute patterns common in supply chain attacks"
+    match:
+      command_contains:
+        - "curl * | sh"
+        - "curl * | bash"
+        - "wget * | sh"
+        - "wget * | bash"
+        - "curl * | sudo sh"
+        - "curl * | sudo bash"
+        - "wget * | sudo sh"
+        - "wget * | sudo bash"
+        - "curl -sSL * | sh"
+        - "wget -qO- * | sh"
+    action: critical
+
+  # ── Scripted Secret Access ─────────────────────────────────────────────────
+  - name: "detect-scripted-secret-access"
+    description: "Flag scripting languages reading credential files directly"
+    match:
+      command_contains:
+        # Python reading secrets
+        - "python*open(*.ssh*"
+        - "python*open(*.aws*"
+        - "python*open(*/etc/shadow*"
+        - "python*open(*.env*"
+        - "python*open(*.netrc*"
+        - "python*open(*.git-credentials*"
+        - "python*base64*encode*.ssh*"
+        - "python*base64*encode*.aws*"
+        # Perl
+        - "perl*MIME::Base64*.ssh*"
+        - "perl*MIME::Base64*.aws*"
+        - "perl*open(*.ssh*"
+        # Ruby
+        - "ruby*File.read*.ssh*"
+        - "ruby*File.read*.aws*"
+        - "ruby*File.read*.env*"
+        # Node.js
+        - "node*readFile*.ssh*"
+        - "node*readFile*.aws*"
+        - "node*readFileSync*.ssh*"
+        - "node*readFileSync*.aws*"
+    action: critical
+
+  # ── Privileged Operations Audit Trail ──────────────────────────────────────
+  - name: "audit-privileged-ops"
+    description: "Log privileged and infrastructure commands for audit trail"
+    match:
+      command_contains:
+        - "sudo "
+        - "systemctl restart"
+        - "systemctl start"
+        - "systemctl stop"
+        - "docker rm "
+        - "docker stop "
+        - "docker kill "
+        - "kubectl delete "
+        - "kubectl apply "
+        - "kubectl exec "
+    action: info
+
+  - name: "audit-network-ops"
+    description: "Log outbound network operations for audit trail"
+    match:
+      command_contains:
+        - "scp "
+        - "rsync "
+        - "sftp "
+        - "ssh "
+    action: info
