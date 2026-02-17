@@ -500,8 +500,8 @@ pub async fn tail_audit_log_full(
     tx: mpsc::Sender<Alert>,
     policy_engine: Option<crate::policy::PolicyEngine>,
     secureclaw_engine: Option<Arc<crate::secureclaw::SecureClawEngine>>,
-    netpolicy: Option<crate::netpolicy::NetPolicy>,
-    extra_safe_hosts: Vec<String>,
+    _netpolicy: Option<crate::netpolicy::NetPolicy>,
+    _extra_safe_hosts: Vec<String>,
 ) -> Result<()> {
     use std::io::{Seek, SeekFrom};
     use tokio::time::{sleep, Duration};
