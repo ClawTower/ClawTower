@@ -47,8 +47,6 @@ pub struct Config {
     pub auto_update: AutoUpdateConfig,
     #[serde(default)]
     pub openclaw: OpenClawConfig,
-    #[serde(default)]
-    pub behavior: BehaviorConfig,
 }
 
 /// Auto-update configuration: checks GitHub releases periodically.
@@ -246,14 +244,9 @@ pub struct ScansConfig {
     /// Interval between persistence-specific scans in seconds (default: 300)
     #[serde(default = "default_persistence_interval")]
     pub persistence_interval: u64,
-    /// Deduplication interval for scan findings in seconds (default: 3600).
-    /// Identical scan findings are suppressed unless this interval has elapsed.
-    #[serde(default = "default_scan_dedup_interval")]
-    pub dedup_interval_secs: u64,
 }
 
 fn default_persistence_interval() -> u64 { 300 }
-fn default_scan_dedup_interval() -> u64 { 3600 }
 
 /// HTTP REST API server configuration.
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -261,19 +254,14 @@ pub struct ApiConfig {
     pub enabled: bool,
     pub bind: String,
     pub port: u16,
-    /// Bearer token for API authentication. If set, all requests must include
-    /// `Authorization: Bearer <token>`. If empty, API is unauthenticated.
-    #[serde(default)]
-    pub auth_token: String,
 }
 
 impl Default for ApiConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            bind: "127.0.0.1".to_string(),
+            bind: "0.0.0.0".to_string(),
             port: 18791,
-            auth_token: String::new(),
         }
     }
 }
@@ -417,6 +405,8 @@ fn default_content_scan_excludes() -> Vec<String> {
         "**/.openclaw/**/auth-profiles.json".to_string(),
         "**/.openclaw/credentials/**".to_string(),
         "**/superpowers/skills/**".to_string(),
+        "**/skills/*/SKILL.md".to_string(),
+        "**/.openclaw/workspace/*.md".to_string(),
     ]
 }
 
@@ -427,6 +417,7 @@ fn default_content_scan_excludes() -> Vec<String> {
 fn default_exclude_content_scan() -> Vec<String> {
     vec![
         "superpowers/skills".to_string(),
+        ".openclaw/workspace".to_string(),
     ]
 }
 
@@ -644,23 +635,6 @@ impl Default for OpenClawConfig {
             mdns_check: false,
             plugin_watch: false,
             session_log_audit: false,
-        }
-    }
-}
-
-/// Behavior detection configuration: user-configurable safe hosts for exfiltration checks.
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct BehaviorConfig {
-    /// Additional hosts to treat as safe for exfiltration detection.
-    /// These are merged with the built-in safe hosts list.
-    #[serde(default)]
-    pub safe_hosts: Vec<String>,
-}
-
-impl Default for BehaviorConfig {
-    fn default() -> Self {
-        Self {
-            safe_hosts: Vec::new(),
         }
     }
 }

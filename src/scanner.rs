@@ -731,6 +731,125 @@ pub fn scan_environment_variables() -> ScanResult {
     }
 }
 
+/// ClawTower's own LD_PRELOAD guard library path — entries matching this are benign.
+const CLAWTOWER_GUARD_PATH: &str = "/usr/local/lib/libclawguard.so";
+
+/// Common shell profile files to scan for LD_PRELOAD persistence.
+const PROFILE_SCAN_PATHS: &[&str] = &[
+    "/etc/environment",
+    "/etc/profile",
+    "/etc/bash.bashrc",
+    "/etc/profile.d/",
+];
+
+/// User-relative profile files to scan (appended to home dir).
+const USER_PROFILE_FILES: &[&str] = &[
+    ".bashrc",
+    ".bash_profile",
+    ".profile",
+    ".zshrc",
+    ".zprofile",
+    ".zshenv",
+];
+
+/// Scan common shell profile and environment files for LD_PRELOAD entries
+/// that don't match ClawTower's own guard library. Detects persistence
+/// mechanisms where an agent injects LD_PRELOAD into login/shell init files.
+pub fn scan_ld_preload_persistence() -> ScanResult {
+    let mut issues = Vec::new();
+
+    // Helper: check a single file for LD_PRELOAD lines
+    let check_file = |path: &str, issues: &mut Vec<String>| {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            for (lineno, line) in content.lines().enumerate() {
+                let trimmed = line.trim();
+                // Skip comments
+                if trimmed.starts_with('#') {
+                    continue;
+                }
+                if trimmed.contains("LD_PRELOAD=") || trimmed.contains("export LD_PRELOAD") {
+                    if !trimmed.contains(CLAWTOWER_GUARD_PATH) {
+                        issues.push(format!(
+                            "{}:{}: {}",
+                            path,
+                            lineno + 1,
+                            trimmed
+                        ));
+                    }
+                }
+            }
+        }
+    };
+
+    // System-wide files
+    for path in PROFILE_SCAN_PATHS {
+        if path.ends_with('/') {
+            // It's a directory — scan all files inside
+            if let Ok(entries) = std::fs::read_dir(path) {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if p.is_file() {
+                        check_file(&p.to_string_lossy(), &mut issues);
+                    }
+                }
+            }
+        } else {
+            check_file(path, &mut issues);
+        }
+    }
+
+    // User profile files for common home directories
+    let home_dirs: Vec<String> = if let Ok(passwd) = std::fs::read_to_string("/etc/passwd") {
+        passwd
+            .lines()
+            .filter_map(|line| {
+                let fields: Vec<&str> = line.split(':').collect();
+                if fields.len() >= 6 {
+                    let uid: u32 = fields[2].parse().unwrap_or(0);
+                    if uid >= 1000 && uid < 65534 {
+                        return Some(fields[5].to_string());
+                    }
+                }
+                None
+            })
+            .collect()
+    } else {
+        // Fallback
+        vec!["/home/openclaw".to_string(), "/root".to_string()]
+    };
+
+    for home in &home_dirs {
+        for profile in USER_PROFILE_FILES {
+            let path = format!("{}/{}", home, profile);
+            check_file(&path, &mut issues);
+        }
+    }
+
+    // Also check /etc/ld.so.preload (not a shell profile, but related)
+    if let Ok(content) = std::fs::read_to_string("/etc/ld.so.preload") {
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.contains(CLAWTOWER_GUARD_PATH) {
+                issues.push(format!("/etc/ld.so.preload: {}", trimmed));
+            }
+        }
+    }
+
+    if issues.is_empty() {
+        ScanResult::new(
+            "ld_preload_persistence",
+            ScanStatus::Pass,
+            "No unauthorized LD_PRELOAD entries in profile files",
+        )
+    } else {
+        ScanResult::new(
+            "ld_preload_persistence",
+            ScanStatus::Fail,
+            &format!("LD_PRELOAD persistence detected: {}", issues.join("; ")),
+        )
+    }
+}
+
 /// Verify OS package integrity via `dpkg --verify` or `rpm -Va`.
 pub fn scan_package_integrity() -> ScanResult {
     let mut issues = Vec::new();
@@ -1736,6 +1855,7 @@ impl SecurityScanner {
             scan_zombie_processes(),
             scan_swap_tmpfs_security(),
             scan_environment_variables(),
+            scan_ld_preload_persistence(),
             scan_package_integrity(),
             scan_core_dump_settings(),
             scan_network_interfaces(),
@@ -2240,6 +2360,47 @@ pub async fn run_periodic_scans(
                 &format!("scan:{}", category),
                 &format!("[RESOLVED] Previously failing check now passes: {}", category),
             )).await;
+        }
+
+        sleep(Duration::from_secs(interval_secs)).await;
+    }
+}
+
+/// Spawn a fast-cycle persistence-only scan task (default 300s interval).
+///
+/// Runs only `scan_user_persistence()` at a higher frequency than full scans,
+/// ensuring persistence mechanisms are detected within minutes, not hours.
+pub async fn run_persistence_scans(
+    interval_secs: u64,
+    raw_tx: mpsc::Sender<Alert>,
+) {
+    use std::collections::HashMap;
+    use std::time::Instant;
+
+    let mut last_emitted: HashMap<String, Instant> = HashMap::new();
+    let cooldown = Duration::from_secs(600); // 10 min cooldown for persistence alerts
+
+    // Initial delay to avoid overlap with first full scan
+    sleep(Duration::from_secs(30)).await;
+
+    loop {
+        let results = tokio::task::spawn_blocking(scan_user_persistence)
+            .await
+            .unwrap_or_default();
+
+        let now = Instant::now();
+        for result in &results {
+            if let Some(alert) = result.to_alert() {
+                let dedup_key = format!("persist_fast:{}:{}", result.category,
+                    match result.status { ScanStatus::Pass => "pass", ScanStatus::Warn => "warn", ScanStatus::Fail => "fail" });
+                if let Some(last) = last_emitted.get(&dedup_key) {
+                    if now.duration_since(*last) < cooldown {
+                        continue;
+                    }
+                }
+                last_emitted.insert(dedup_key, now);
+                let _ = raw_tx.send(alert).await;
+            }
         }
 
         sleep(Duration::from_secs(interval_secs)).await;
