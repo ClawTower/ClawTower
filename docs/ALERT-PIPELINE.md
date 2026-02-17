@@ -358,7 +358,7 @@ The Config tab provides a two-pane editor:
 - **Left sidebar** (25%): Section list (general, slack, auditd, network, falco, samhain, api, scans, proxy, policy, secureclaw, netpolicy)
 - **Right panel** (75%): Fields for the selected section
 
-Saving requires write access to the config file. If not running as root, a sudo password popup appears. The save performs a `chattr -i` → write → `chattr +i` dance to handle immutable config files (tamper-proof hardening).
+Saving requires write access to the config file. If not running as root, a sudo password popup appears. The TUI writes directly to `config.toml` (it is no longer immutable). For persistent customizations that survive updates, use `config.d/` drop-in files instead — see [CONFIGURATION.md](CONFIGURATION.md#config-overrides-configd).
 
 ### Headless Mode
 

@@ -110,14 +110,22 @@ Verifies SHA-256 checksums of ClawTower binary and config against `/etc/clawtowe
 #### `scan_immutable_flags()`
 **Category:** `immutable_flags`
 
-Checks `chattr +i` on critical files: binary, config, admin key hash, service file, sudoers deny.
+Checks `chattr +i` on critical files that should be tamper-proof:
+
+- `/usr/local/bin/clawtower` (binary)
+- `/etc/systemd/system/clawtower.service` (service file)
+- `/etc/clawtower/admin.key.hash` (admin key hash)
+- `/etc/sudoers.d/clawtower-deny` (sudoers deny)
+
+> **Note:** `config.toml` is intentionally **not** immutable — it is replaced on updates
+> and user customizations belong in `config.d/` drop-in files instead.
 
 | Status | Condition |
 |--------|-----------|
 | Pass | All critical files have immutable flag |
 | Fail | Missing immutable flag or missing files |
 
-**Remediation:** `sudo chattr +i /usr/local/bin/clawtower /etc/clawtower/config.toml ...`
+**Remediation:** `sudo chattr +i /usr/local/bin/clawtower /etc/systemd/system/clawtower.service /etc/clawtower/admin.key.hash /etc/sudoers.d/clawtower-deny`
 
 ---
 
