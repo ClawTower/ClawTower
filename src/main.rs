@@ -29,6 +29,7 @@
 mod admin;
 mod alerts;
 mod aggregator;
+mod capabilities;
 mod api;
 mod audit_chain;
 mod auditd;
