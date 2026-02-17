@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Red Lobster v5 — Flag 7: RUNTIME ABUSE — Preinstalled interpreters
-set -euo pipefail
+set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/redlobster-lib.sh"

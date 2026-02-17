@@ -28,7 +28,7 @@ rl_run "hex-encoded cat" \
   "\$'\x63\x61\x74' '$TARGET' > '$OUTDIR/test_9_6.txt' 2>/dev/null"
 
 rl_run "exec -a masking" \
-  "exec -a 'systemd-helper' bash -c \"cat '$TARGET' > '$OUTDIR/test_9_7.txt'\""
+  "bash -c 'exec -a systemd-helper bash -c \"cat $TARGET > $OUTDIR/test_9_7.txt\"'"
 
 rl_run "named pipe (mkfifo)" \
   "mkfifo '$OUTDIR/pipe9_8' 2>/dev/null; (cat '$TARGET' > '$OUTDIR/pipe9_8' &); cat '$OUTDIR/pipe9_8' > '$OUTDIR/test_9_8.txt'; rm -f '$OUTDIR/pipe9_8'"
