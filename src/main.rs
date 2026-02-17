@@ -60,6 +60,13 @@ mod tui;
 mod response;
 mod update;
 
+#[cfg(test)]
+mod integration_tests;
+#[cfg(test)]
+mod adversarial_tests;
+#[cfg(test)]
+mod benchmarks;
+
 use anyhow::Result;
 use config::Config;
 use alerts::{Alert, Severity};
