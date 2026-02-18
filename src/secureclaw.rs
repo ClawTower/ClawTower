@@ -857,6 +857,186 @@ impl IocBundleVerifier {
     }
 }
 
+/// Atomically update an IOC bundle JSON file with optional signature verification.
+///
+/// Writes new content to `<path>.new`, verifies signature if a verifier and
+/// signature bytes are provided, then renames over the original (backing up
+/// to `<path>.bak`). On verification failure, cleans up the `.new` file and
+/// returns an error — the original file is never modified.
+pub fn update_ioc_bundle(
+    json_path: &Path,
+    new_content: &[u8],
+    new_sig: Option<&[u8]>,
+    verifier: Option<&IocBundleVerifier>,
+) -> Result<IocBundleMetadata> {
+    let new_path = json_path.with_extension("json.new");
+    let bak_path = json_path.with_extension("json.bak");
+    let sig_path = json_path.with_extension("json.sig");
+
+    // Write new content to staging file
+    fs::write(&new_path, new_content)
+        .with_context(|| format!("Failed to write staging file: {}", new_path.display()))?;
+
+    // Write signature sidecar for staging file if provided
+    if let Some(sig) = new_sig {
+        let new_sig_path = json_path.with_extension("json.new.sig");
+        fs::write(&new_sig_path, sig)
+            .with_context(|| format!("Failed to write staging signature: {}", new_sig_path.display()))?;
+    }
+
+    // Verify signature if verifier is available and signature was provided
+    if let (Some(verifier), Some(_sig)) = (verifier, new_sig) {
+        let meta = verifier.verify_bundle(&new_path)?;
+        if meta.signature_present && !meta.verified {
+            // Bad signature — clean up staging files and abort
+            let _ = fs::remove_file(&new_path);
+            let new_sig_path = json_path.with_extension("json.new.sig");
+            let _ = fs::remove_file(&new_sig_path);
+            anyhow::bail!("IOC bundle signature verification failed for {}", json_path.display());
+        }
+    }
+
+    // Backup old file if it exists
+    if json_path.exists() {
+        fs::copy(json_path, &bak_path)
+            .with_context(|| format!("Failed to create backup: {}", bak_path.display()))?;
+    }
+
+    // Atomic rename: staging → final
+    fs::rename(&new_path, json_path)
+        .with_context(|| format!("Failed to rename {} → {}", new_path.display(), json_path.display()))?;
+
+    // Install signature sidecar if provided
+    if let Some(sig) = new_sig {
+        fs::write(&sig_path, sig)?;
+        // Clean up staging signature
+        let new_sig_path = json_path.with_extension("json.new.sig");
+        let _ = fs::remove_file(&new_sig_path);
+    }
+
+    // Return metadata of the installed bundle
+    let version = IocBundleVerifier::extract_version(new_content);
+    let (verified, signature_present) = if let Some(verifier) = verifier {
+        match verifier.verify_bundle(json_path) {
+            Ok(meta) => (meta.verified, meta.signature_present),
+            Err(_) => (false, new_sig.is_some()),
+        }
+    } else {
+        (false, new_sig.is_some())
+    };
+
+    Ok(IocBundleMetadata {
+        path: json_path.display().to_string(),
+        version,
+        verified,
+        signature_present,
+    })
+}
+
+/// Run the `update-ioc` subcommand: update IOC bundles from local files.
+///
+/// Usage: `clawtower update-ioc [--vendor-dir DIR] [--pubkey PATH] FILE...`
+///
+/// If no files are specified, updates all JSON files in the vendor directory.
+pub fn run_update_ioc(args: &[String]) -> Result<()> {
+    let mut vendor_dir = SecureClawConfig::default().vendor_dir;
+    let mut pubkey_path = SecureClawConfig::default().ioc_pubkey_path;
+    let mut files: Vec<String> = Vec::new();
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--vendor-dir" => {
+                i += 1;
+                if i < args.len() { vendor_dir = args[i].clone(); }
+            }
+            "--pubkey" => {
+                i += 1;
+                if i < args.len() { pubkey_path = args[i].clone(); }
+            }
+            other => files.push(other.to_string()),
+        }
+        i += 1;
+    }
+
+    // If no specific files, find all JSON files in vendor dir
+    if files.is_empty() {
+        let vendor = Path::new(&vendor_dir);
+        if vendor.exists() {
+            for entry in fs::read_dir(vendor)? {
+                let entry = entry?;
+                if entry.path().extension().map(|e| e == "json").unwrap_or(false) {
+                    files.push(entry.path().display().to_string());
+                }
+            }
+        } else {
+            eprintln!("Vendor directory does not exist: {}", vendor_dir);
+            std::process::exit(1);
+        }
+    }
+
+    // Load verifier if pubkey exists
+    let pubkey = Path::new(&pubkey_path);
+    let verifier = if pubkey.exists() {
+        match IocBundleVerifier::from_file(pubkey) {
+            Ok(v) => {
+                eprintln!("Loaded IOC signing key from {}", pubkey_path);
+                Some(v)
+            }
+            Err(e) => {
+                eprintln!("Warning: failed to load signing key: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let mut success = 0;
+    let mut failed = 0;
+    for file in &files {
+        let path = Path::new(file);
+        if !path.exists() {
+            eprintln!("  SKIP {}: file not found", file);
+            continue;
+        }
+        let content = fs::read(path)?;
+        // Look for a .sig sidecar
+        let sig_path = path.with_extension(format!(
+            "{}.sig",
+            path.extension().unwrap_or_default().to_string_lossy()
+        ));
+        let sig = if sig_path.exists() {
+            Some(fs::read(&sig_path)?)
+        } else {
+            None
+        };
+
+        match update_ioc_bundle(
+            path,
+            &content,
+            sig.as_deref(),
+            verifier.as_ref(),
+        ) {
+            Ok(meta) => {
+                let status = if meta.verified { "verified" } else if meta.signature_present { "UNVERIFIED" } else { "unsigned" };
+                eprintln!("  OK {} (version {}, {})", file, meta.version, status);
+                success += 1;
+            }
+            Err(e) => {
+                eprintln!("  FAIL {}: {}", file, e);
+                failed += 1;
+            }
+        }
+    }
+
+    eprintln!("\nIOC update complete: {} succeeded, {} failed", success, failed);
+    if failed > 0 {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1430,5 +1610,88 @@ mod tests {
         let matches = engine.check_text("test_payload here");
         assert!(!matches.is_empty());
         assert_eq!(matches[0].db_version, Some("2.5.0".to_string()));
+    }
+
+    // ---- IOC Bundle Update Tests ----
+
+    #[test]
+    fn test_update_ioc_atomic_replace_success() {
+        let d = TempDir::new().unwrap();
+        let json_path = d.path().join("supply-chain-ioc.json");
+        let old_content = r#"{"version":"1.0.0","suspicious_skill_patterns":[]}"#;
+        fs::write(&json_path, old_content).unwrap();
+
+        let new_content = r#"{"version":"2.0.0","suspicious_skill_patterns":["evil"]}"#;
+        let meta = update_ioc_bundle(&json_path, new_content.as_bytes(), None, None).unwrap();
+
+        // New file should be in place
+        let current = fs::read_to_string(&json_path).unwrap();
+        assert_eq!(current, new_content);
+        assert_eq!(meta.version, "2.0.0");
+
+        // Backup should exist with old content
+        let bak_path = json_path.with_extension("json.bak");
+        let bak_content = fs::read_to_string(&bak_path).unwrap();
+        assert_eq!(bak_content, old_content);
+    }
+
+    #[test]
+    fn test_update_ioc_rolls_back_on_bad_signature() {
+        use ed25519_dalek::{Signer, SigningKey};
+        use sha2::Digest as _;
+
+        let d = TempDir::new().unwrap();
+        let json_path = d.path().join("test-ioc.json");
+        let old_content = r#"{"version":"1.0.0","suspicious_skill_patterns":[]}"#;
+        fs::write(&json_path, old_content).unwrap();
+
+        // Create verifier with one key, sign with a different key
+        let secret1: [u8; 32] = [10u8; 32];
+        let signing_key1 = SigningKey::from_bytes(&secret1);
+        let verifying_key1 = signing_key1.verifying_key();
+
+        let secret2: [u8; 32] = [20u8; 32];
+        let signing_key2 = SigningKey::from_bytes(&secret2);
+
+        // Sign new content with key2 but verify with key1
+        let new_content = r#"{"version":"2.0.0","suspicious_skill_patterns":["bad"]}"#;
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(new_content.as_bytes());
+        let digest = hasher.finalize();
+        let bad_sig = signing_key2.sign(&digest);
+
+        let verifier = IocBundleVerifier::from_bytes(verifying_key1.as_bytes()).unwrap();
+        let result = update_ioc_bundle(
+            &json_path,
+            new_content.as_bytes(),
+            Some(&bad_sig.to_bytes()),
+            Some(&verifier),
+        );
+
+        assert!(result.is_err(), "Should fail with bad signature");
+
+        // Original file should be unchanged
+        let current = fs::read_to_string(&json_path).unwrap();
+        assert_eq!(current, old_content);
+
+        // No .new file should be left behind
+        let new_path = json_path.with_extension("json.new");
+        assert!(!new_path.exists(), ".new file should be cleaned up");
+    }
+
+    #[test]
+    fn test_update_ioc_creates_backup() {
+        let d = TempDir::new().unwrap();
+        let json_path = d.path().join("test-ioc.json");
+        let old_content = r#"{"version":"1.0.0","suspicious_skill_patterns":[]}"#;
+        fs::write(&json_path, old_content).unwrap();
+
+        let new_content = r#"{"version":"3.0.0","suspicious_skill_patterns":["new"]}"#;
+        let _ = update_ioc_bundle(&json_path, new_content.as_bytes(), None, None).unwrap();
+
+        let bak_path = json_path.with_extension("json.bak");
+        assert!(bak_path.exists());
+        let bak = fs::read_to_string(&bak_path).unwrap();
+        assert_eq!(bak, old_content);
     }
 }

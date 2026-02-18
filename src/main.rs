@@ -120,6 +120,7 @@ COMMANDS:
     setup-apparmor       Install AppArmor profiles (or pam_cap fallback)
     uninstall            Reverse hardening + remove ClawTower (requires admin key)
     profile list         List available deployment profiles
+    update-ioc           Update IOC bundles with signature verification
     sync                 Update SecureClaw pattern databases
     logs                 Tail the service logs (journalctl)
     help                 Show this help message
@@ -545,6 +546,9 @@ async fn async_main() -> Result<()> {
             // can remove protected files even with AppArmor profiles active.
             pre_harden_cleanup();
             return run_script("uninstall.sh", &rest_args);
+        }
+        "update-ioc" => {
+            return secureclaw::run_update_ioc(&rest_args);
         }
         "sync" => {
             return run_script("sync-secureclaw.sh", &rest_args);
