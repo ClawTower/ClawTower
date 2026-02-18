@@ -14,6 +14,7 @@
 use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -24,6 +25,7 @@ use tokio::sync::{mpsc, Mutex};
 
 use crate::alerts::{Alert, Severity};
 use crate::response::{ResponseRequest, SharedPendingActions};
+use crate::scanner::SharedScanResults;
 
 /// Thread-safe ring buffer of alerts for the API.
 ///
@@ -148,20 +150,31 @@ fn json_response(status: StatusCode, body: String) -> Response<Body> {
         .unwrap()
 }
 
+/// Consolidated context for the API handler, holding all shared state.
+pub struct ApiContext {
+    pub store: SharedAlertStore,
+    pub start_time: Instant,
+    pub auth_token: String,
+    pub pending_store: SharedPendingActions,
+    pub response_tx: Option<Arc<mpsc::Sender<ResponseRequest>>>,
+    // Evidence bundle fields (all optional for backward compat)
+    pub scan_results: Option<SharedScanResults>,
+    pub audit_chain_path: Option<PathBuf>,
+    pub policy_dir: Option<PathBuf>,
+    pub barnacle_dir: Option<PathBuf>,
+    pub active_profile: Option<String>,
+}
+
 async fn handle(
     req: Request<Body>,
-    store: SharedAlertStore,
-    start_time: Instant,
-    auth_token: Arc<String>,
-    pending_store: SharedPendingActions,
-    response_tx: Option<Arc<mpsc::Sender<ResponseRequest>>>,
+    ctx: Arc<ApiContext>,
 ) -> Result<Response<Body>, Infallible> {
     // Check bearer token auth if configured
-    if !auth_token.is_empty() {
+    if !ctx.auth_token.is_empty() {
         let authorized = req.headers()
             .get("authorization")
             .and_then(|v| v.to_str().ok())
-            .map(|v| v.strip_prefix("Bearer ").unwrap_or("") == auth_token.as_str())
+            .map(|v| v.strip_prefix("Bearer ").unwrap_or("") == ctx.auth_token.as_str())
             .unwrap_or(false);
 
         if !authorized && req.uri().path() != "/api/health" {
@@ -193,7 +206,7 @@ async fn handle(
             let parity = crate::auditd::parity_stats_snapshot();
             let resp = StatusResponse {
                 status: "running",
-                uptime_seconds: start_time.elapsed().as_secs(),
+                uptime_seconds: ctx.start_time.elapsed().as_secs(),
                 version: env!("CARGO_PKG_VERSION"),
                 modules: Modules {
                     auditd: true,
@@ -210,7 +223,7 @@ async fn handle(
             json_response(StatusCode::OK, serde_json::to_string(&resp).unwrap())
         }
         "/api/alerts" => {
-            let store = store.lock().await;
+            let store = ctx.store.lock().await;
             let alerts: Vec<AlertJson> = store
                 .last_n(100)
                 .into_iter()
@@ -224,24 +237,24 @@ async fn handle(
             json_response(StatusCode::OK, serde_json::to_string(&alerts).unwrap())
         }
         "/api/health" => {
-            let store = store.lock().await;
+            let store = ctx.store.lock().await;
             let last_alert_age = store.last_n(1).first().map(|a| {
                 chrono::Utc::now().signed_duration_since(a.timestamp).num_seconds() as u64
             });
             let resp = serde_json::json!({
                 "healthy": true,
-                "uptime_seconds": start_time.elapsed().as_secs(),
+                "uptime_seconds": ctx.start_time.elapsed().as_secs(),
                 "version": env!("CARGO_PKG_VERSION"),
                 "last_alert_age_seconds": last_alert_age,
             });
             json_response(StatusCode::OK, serde_json::to_string(&resp).unwrap())
         }
         "/api/security" => {
-            let store = store.lock().await;
+            let store = ctx.store.lock().await;
             let (info, warn, crit) = store.count_by_severity();
             let parity = crate::auditd::parity_stats_snapshot();
             let resp = SecurityResponse {
-                uptime_seconds: start_time.elapsed().as_secs(),
+                uptime_seconds: ctx.start_time.elapsed().as_secs(),
                 total_alerts: store.len(),
                 alerts_by_severity: SeverityCounts {
                     info,
@@ -258,7 +271,7 @@ async fn handle(
             json_response(StatusCode::OK, serde_json::to_string(&resp).unwrap())
         }
         "/api/pending" => {
-            let pending = pending_store.lock().await;
+            let pending = ctx.pending_store.lock().await;
             let items: Vec<serde_json::Value> = pending.iter().map(|a| {
                 serde_json::json!({
                     "id": a.id,
@@ -277,7 +290,7 @@ async fn handle(
         path if path.starts_with("/api/pending/") && (path.ends_with("/approve") || path.ends_with("/deny")) => {
             if req.method() != &hyper::Method::POST {
                 json_response(StatusCode::METHOD_NOT_ALLOWED, r#"{"error":"POST required"}"#.to_string())
-            } else if let Some(ref resp_tx) = response_tx {
+            } else if let Some(ref resp_tx) = ctx.response_tx {
                 let parts: Vec<&str> = path.split('/').collect();
                 if parts.len() == 5 {
                     let id = parts[3].to_string();
@@ -319,6 +332,7 @@ async fn handle(
 /// Start the HTTP API server on the given bind address and port.
 ///
 /// Runs indefinitely, serving requests against the shared alert store.
+/// For full evidence bundle support, use [`run_api_server_with_context`] instead.
 pub async fn run_api_server(
     bind: &str,
     port: u16,
@@ -327,19 +341,37 @@ pub async fn run_api_server(
     pending_store: SharedPendingActions,
     response_tx: Option<mpsc::Sender<ResponseRequest>>,
 ) -> anyhow::Result<()> {
+    let ctx = Arc::new(ApiContext {
+        store,
+        start_time: Instant::now(),
+        auth_token,
+        pending_store,
+        response_tx: response_tx.map(Arc::new),
+        scan_results: None,
+        audit_chain_path: None,
+        policy_dir: None,
+        barnacle_dir: None,
+        active_profile: None,
+    });
+    run_api_server_with_context(bind, port, ctx).await
+}
+
+/// Start the HTTP API server with a fully-configured [`ApiContext`].
+///
+/// Use this when wiring in evidence bundle fields (scan results, audit chain,
+/// policy/barnacle directories) from `main.rs`.
+pub async fn run_api_server_with_context(
+    bind: &str,
+    port: u16,
+    ctx: Arc<ApiContext>,
+) -> anyhow::Result<()> {
     let addr: SocketAddr = format!("{}:{}", bind, port).parse()?;
-    let start_time = Instant::now();
-    let auth_token = Arc::new(auth_token);
-    let response_tx = response_tx.map(Arc::new);
 
     let make_svc = make_service_fn(move |_conn| {
-        let store = store.clone();
-        let auth_token = auth_token.clone();
-        let pending_store = pending_store.clone();
-        let response_tx = response_tx.clone();
+        let ctx = ctx.clone();
         async move {
             Ok::<_, Infallible>(service_fn(move |req| {
-                handle(req, store.clone(), start_time, auth_token.clone(), pending_store.clone(), response_tx.clone())
+                handle(req, ctx.clone())
             }))
         }
     });
@@ -353,6 +385,36 @@ pub async fn run_api_server(
 mod tests {
     use super::*;
     use crate::alerts::{Alert, Severity};
+
+    fn test_ctx(auth_token: &str) -> Arc<ApiContext> {
+        Arc::new(ApiContext {
+            store: new_shared_store(100),
+            start_time: Instant::now(),
+            auth_token: auth_token.to_string(),
+            pending_store: Arc::new(Mutex::new(Vec::new())),
+            response_tx: None,
+            scan_results: None,
+            audit_chain_path: None,
+            policy_dir: None,
+            barnacle_dir: None,
+            active_profile: None,
+        })
+    }
+
+    fn test_ctx_with_store(auth_token: &str, store: SharedAlertStore) -> Arc<ApiContext> {
+        Arc::new(ApiContext {
+            store,
+            start_time: Instant::now(),
+            auth_token: auth_token.to_string(),
+            pending_store: Arc::new(Mutex::new(Vec::new())),
+            response_tx: None,
+            scan_results: None,
+            audit_chain_path: None,
+            policy_dir: None,
+            barnacle_dir: None,
+            active_profile: None,
+        })
+    }
 
     #[test]
     fn test_ring_buffer_capacity() {
@@ -410,95 +472,80 @@ mod tests {
 
     #[tokio::test]
     async fn test_redlobster_no_bearer_gets_401() {
-        let store = new_shared_store(100);
-        let token = Arc::new("secret-token-123".to_string());
+        let ctx = test_ctx("secret-token-123");
         let req = Request::builder()
             .uri("/api/status")
             .body(Body::empty())
             .unwrap();
-        let pending: SharedPendingActions = Arc::new(Mutex::new(Vec::new()));
-        let resp = handle(req, store, Instant::now(), token, pending, None).await.unwrap();
+        let resp = handle(req, ctx).await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
     async fn test_redlobster_wrong_bearer_gets_401() {
-        let store = new_shared_store(100);
-        let token = Arc::new("secret-token-123".to_string());
+        let ctx = test_ctx("secret-token-123");
         let req = Request::builder()
             .uri("/api/alerts")
             .header("Authorization", "Bearer wrong-token")
             .body(Body::empty())
             .unwrap();
-        let pending: SharedPendingActions = Arc::new(Mutex::new(Vec::new()));
-        let resp = handle(req, store, Instant::now(), token, pending, None).await.unwrap();
+        let resp = handle(req, ctx).await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
     async fn test_redlobster_correct_bearer_gets_200() {
-        let store = new_shared_store(100);
-        let token = Arc::new("secret-token-123".to_string());
+        let ctx = test_ctx("secret-token-123");
         let req = Request::builder()
             .uri("/api/status")
             .header("Authorization", "Bearer secret-token-123")
             .body(Body::empty())
             .unwrap();
-        let pending: SharedPendingActions = Arc::new(Mutex::new(Vec::new()));
-        let resp = handle(req, store, Instant::now(), token, pending, None).await.unwrap();
+        let resp = handle(req, ctx).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[tokio::test]
     async fn test_redlobster_health_bypasses_auth() {
-        let store = new_shared_store(100);
-        let token = Arc::new("secret-token-123".to_string());
+        let ctx = test_ctx("secret-token-123");
         let req = Request::builder()
             .uri("/api/health")
             .body(Body::empty())
             .unwrap();
-        let pending: SharedPendingActions = Arc::new(Mutex::new(Vec::new()));
-        let resp = handle(req, store, Instant::now(), token, pending, None).await.unwrap();
+        let resp = handle(req, ctx).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[tokio::test]
     async fn test_redlobster_empty_token_no_auth_required() {
-        let store = new_shared_store(100);
-        let token = Arc::new(String::new());
+        let ctx = test_ctx("");
         let req = Request::builder()
             .uri("/api/status")
             .body(Body::empty())
             .unwrap();
-        let pending: SharedPendingActions = Arc::new(Mutex::new(Vec::new()));
-        let resp = handle(req, store, Instant::now(), token, pending, None).await.unwrap();
+        let resp = handle(req, ctx).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK, "Empty auth_token means auth disabled");
     }
 
     #[tokio::test]
     async fn test_redlobster_security_endpoint_requires_auth() {
-        let store = new_shared_store(100);
-        let token = Arc::new("mytoken".to_string());
+        let ctx = test_ctx("mytoken");
         let req = Request::builder()
             .uri("/api/security")
             .body(Body::empty())
             .unwrap();
-        let pending: SharedPendingActions = Arc::new(Mutex::new(Vec::new()));
-        let resp = handle(req, store, Instant::now(), token, pending, None).await.unwrap();
+        let resp = handle(req, ctx).await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
     async fn test_status_includes_parity_counters() {
-        let store = new_shared_store(100);
-        let token = Arc::new(String::new());
+        let ctx = test_ctx("");
         let req = Request::builder()
             .uri("/api/status")
             .body(Body::empty())
             .unwrap();
-        let pending: SharedPendingActions = Arc::new(Mutex::new(Vec::new()));
-
-        let resp = handle(req, store, Instant::now(), token, pending, None).await.unwrap();
+        let resp = handle(req, ctx).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let body = hyper::body::to_bytes(resp.into_body()).await.unwrap();
@@ -508,5 +555,11 @@ mod tests {
         assert!(parity.get("mismatches_total").is_some());
         assert!(parity.get("alerts_emitted").is_some());
         assert!(parity.get("alerts_suppressed").is_some());
+    }
+
+    #[test]
+    fn test_api_context_construction() {
+        let ctx = test_ctx("test");
+        assert_eq!(ctx.auth_token, "test");
     }
 }
