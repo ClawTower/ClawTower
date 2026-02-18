@@ -309,11 +309,16 @@ fn cis_control_name(id: &str) -> &'static str {
 
 /// Return the control name lookup function for a given framework.
 #[allow(dead_code)]
+fn mitre_technique_name(id: &str) -> &'static str {
+    lookup_mitre_technique(id).map(|t| t.technique_name).unwrap_or("Unknown Technique")
+}
+
 fn control_name_for_framework(framework: &str, id: &str) -> String {
     let name = match framework {
         "soc2" => soc2_control_name(id),
         "nist-800-53" => nist_control_name(id),
         "cis-v8" => cis_control_name(id),
+        "mitre-attack" => mitre_technique_name(id),
         _ => "Unknown Control",
     };
     name.to_string()
@@ -336,7 +341,7 @@ pub fn lookup_controls(category: &str) -> Option<&'static ControlMapping> {
 /// Get all supported compliance framework identifiers.
 #[allow(dead_code)]
 pub fn supported_frameworks() -> &'static [&'static str] {
-    &["soc2", "nist-800-53", "cis-v8"]
+    &["soc2", "nist-800-53", "cis-v8", "mitre-attack"]
 }
 
 /// Generate a compliance report from alert data.
@@ -382,6 +387,7 @@ pub fn generate_report(
             "soc2" => mapping.soc2_controls,
             "nist-800-53" => mapping.nist_controls,
             "cis-v8" => mapping.cis_controls,
+            "mitre-attack" => mapping.mitre_attack,
             _ => mapping.soc2_controls, // default to soc2
         };
         for &cid in control_ids {
@@ -398,6 +404,7 @@ pub fn generate_report(
                 "soc2" => mapping.soc2_controls,
                 "nist-800-53" => mapping.nist_controls,
                 "cis-v8" => mapping.cis_controls,
+                "mitre-attack" => mapping.mitre_attack,
                 _ => mapping.soc2_controls,
             };
 
@@ -636,6 +643,7 @@ fn framework_display_name(framework: &str) -> &str {
         "soc2" => "SOC 2 Type II",
         "nist-800-53" => "NIST 800-53 Rev 5",
         "cis-v8" => "CIS Controls v8",
+        "mitre-attack" => "MITRE ATT&CK",
         _ => framework,
     }
 }
@@ -684,10 +692,11 @@ mod tests {
     #[test]
     fn test_supported_frameworks() {
         let frameworks = supported_frameworks();
-        assert_eq!(frameworks.len(), 3);
+        assert_eq!(frameworks.len(), 4);
         assert!(frameworks.contains(&"soc2"));
         assert!(frameworks.contains(&"nist-800-53"));
         assert!(frameworks.contains(&"cis-v8"));
+        assert!(frameworks.contains(&"mitre-attack"));
     }
 
     #[test]
@@ -924,6 +933,41 @@ mod tests {
         assert!(lookup_controls("behavior:social_engineering").is_some());
         assert!(lookup_controls("secureclaw:supply_chain").is_some());
         assert!(lookup_controls("sentinel:skill_intake").is_some());
+    }
+
+    #[test]
+    fn test_mitre_attack_framework_in_supported_list() {
+        let frameworks = supported_frameworks();
+        assert!(frameworks.contains(&"mitre-attack"), "mitre-attack should be supported");
+    }
+
+    #[test]
+    fn test_generate_mitre_attack_report() {
+        let alerts = vec![(
+            "behavior:data_exfiltration".to_string(),
+            "critical".to_string(),
+            3u64,
+        )];
+        let report = generate_report("mitre-attack", 30, &alerts, &[]);
+        assert_eq!(report.framework, "mitre-attack");
+        // T1048 should be present as a control finding
+        let t1048 = report.control_findings.iter()
+            .find(|f| f.control_id == "T1048")
+            .expect("T1048 should be in report");
+        assert_eq!(t1048.status, FindingStatus::Critical);
+        assert!(t1048.control_name.contains("Exfiltration"));
+    }
+
+    #[test]
+    fn test_mitre_report_text_output() {
+        let alerts = vec![(
+            "behavior:persistence".to_string(),
+            "warning".to_string(),
+            1u64,
+        )];
+        let report = generate_report("mitre-attack", 7, &alerts, &[]);
+        let text = report_to_text(&report);
+        assert!(text.contains("MITRE ATT&CK"));
     }
 
     #[test]
