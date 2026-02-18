@@ -56,6 +56,7 @@ const STREAM_CHANNEL_CAPACITY: usize = 1000;
 
 /// Errors that can occur during command execution.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum CommandError {
     /// The program path is not absolute (e.g., `"ls"` instead of `"/usr/bin/ls"`).
     NotAbsolute,
@@ -141,6 +142,7 @@ impl SafeCommand {
     }
 
     /// Add a single argument to the command.
+    #[allow(dead_code)]
     pub fn arg(mut self, arg: &str) -> Self {
         self.args.push(arg.to_string());
         self
@@ -162,6 +164,7 @@ impl SafeCommand {
     ///
     /// Only takes effect when `env_clear` is true (the default). The variable's
     /// value is read from the current process environment at execution time.
+    #[allow(dead_code)]
     pub fn allow_env(mut self, var: &str) -> Self {
         self.env_allow.push(var.to_string());
         self

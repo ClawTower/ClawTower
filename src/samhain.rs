@@ -10,7 +10,7 @@ use std::path::Path;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
 
-use crate::alerts::{Alert, Severity};
+use crate::alerts::Alert;
 use crate::safe_match::parse_log_severity;
 use crate::safe_tail::SafeTailer;
 
@@ -71,6 +71,7 @@ pub async fn tail_samhain_log(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::alerts::Severity;
 
     #[test]
     fn test_parse_crit_line() {

@@ -69,6 +69,7 @@ impl SafeTailer {
     ///
     /// Lines exceeding this limit are truncated and a Warning alert is sent
     /// (once per overlong-line occurrence).
+    #[allow(dead_code)]
     pub fn max_line_len(mut self, len: usize) -> Self {
         self.max_line_len = len;
         self
@@ -84,6 +85,7 @@ impl SafeTailer {
     ///
     /// After this many retries, a Critical alert is sent but retries continue
     /// at 2x the normal interval (fail-closed: never silently stop).
+    #[allow(dead_code)]
     pub fn max_retries(mut self, n: u32) -> Self {
         self.max_retries = Some(n);
         self

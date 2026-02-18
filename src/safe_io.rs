@@ -196,6 +196,7 @@ pub fn mkdir_safe(path: &Path, mode: u32) -> io::Result<()> {
 ///
 /// Returns `Ok(())` if checks pass, or `Err(String)` with a human-readable
 /// description of the violation.
+#[allow(dead_code)]
 pub fn check_permissions(path: &Path, expected_uid: u32, max_mode: u32) -> Result<(), String> {
     let c_path = path_to_cstring(path).map_err(|e| format!("invalid path: {}", e))?;
 
