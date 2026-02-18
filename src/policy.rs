@@ -14,7 +14,8 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Sha256, Digest};
 
 use crate::alerts::Severity;
 use crate::auditd::ParsedEvent;
@@ -78,12 +79,21 @@ pub(crate) struct PolicyFile {
     rules: Vec<PolicyRule>,
 }
 
+/// Metadata about a loaded policy file, including its SHA-256 hash for audit provenance.
+#[derive(Debug, Clone, Serialize)]
+pub struct PolicyFileInfo {
+    pub filename: String,
+    pub sha256: String,
+    pub rules_count: usize,
+}
+
 /// YAML policy engine: loads rules from files and evaluates audit events against them.
 ///
 /// Skips clawsudo enforcement rules and returns the highest-severity matching verdict.
 #[derive(Debug, Clone)]
 pub struct PolicyEngine {
     rules: Vec<PolicyRule>,
+    loaded_files: Vec<PolicyFileInfo>,
 }
 
 fn action_to_severity(action: &str) -> Severity {
@@ -106,7 +116,7 @@ fn severity_rank(s: &Severity) -> u8 {
 impl PolicyEngine {
     /// Create an empty policy engine
     pub fn new() -> Self {
-        Self { rules: Vec::new() }
+        Self { rules: Vec::new(), loaded_files: Vec::new() }
     }
 
     /// Merge override rules onto base rules by name.
@@ -128,7 +138,7 @@ impl PolicyEngine {
     /// Load all .yaml/.yml files from a directory
     pub fn load(dir: &Path) -> Result<Self> {
         if !dir.exists() {
-            return Ok(Self { rules: Vec::new() });
+            return Ok(Self::new());
         }
 
         let entries = std::fs::read_dir(dir)
@@ -164,6 +174,7 @@ impl PolicyEngine {
         });
 
         let mut all_rules: Vec<PolicyRule> = Vec::new();
+        let mut loaded_files: Vec<PolicyFileInfo> = Vec::new();
         let mut load_errors: Vec<String> = Vec::new();
         for entry in files {
             let path = entry.path();
@@ -175,6 +186,9 @@ impl PolicyEngine {
                     continue;
                 }
             };
+
+            let sha256 = format!("{:x}", Sha256::digest(content.as_bytes()));
+
             let pf: PolicyFile = match serde_yaml::from_str(&content) {
                 Ok(pf) => pf,
                 Err(e) => {
@@ -183,10 +197,16 @@ impl PolicyEngine {
                     continue;
                 }
             };
+            let rules_count = pf.rules.len();
             all_rules = Self::merge_rules(all_rules, pf.rules);
+            loaded_files.push(PolicyFileInfo {
+                filename: path.file_name().unwrap().to_string_lossy().to_string(),
+                sha256,
+                rules_count,
+            });
         }
 
-        Ok(Self { rules: all_rules })
+        Ok(Self { rules: all_rules, loaded_files })
     }
 
     /// Load from multiple directories (first found wins, but all are loaded)
@@ -196,6 +216,7 @@ impl PolicyEngine {
             if dir.exists() {
                 let loaded = Self::load(dir)?;
                 engine.rules.extend(loaded.rules);
+                engine.loaded_files.extend(loaded.loaded_files);
             }
         }
         Ok(engine)
@@ -204,6 +225,11 @@ impl PolicyEngine {
     /// Number of loaded rules
     pub fn rule_count(&self) -> usize {
         self.rules.len()
+    }
+
+    /// Metadata about each loaded policy file (filename, SHA-256 hash, rule count).
+    pub fn file_info(&self) -> &[PolicyFileInfo] {
+        &self.loaded_files
     }
 
     /// Evaluate an event against all rules. Returns the highest-severity match.
@@ -376,7 +402,7 @@ rules:
 
     fn load_from_str(yaml: &str) -> PolicyEngine {
         let pf: PolicyFile = serde_yaml::from_str(yaml).unwrap();
-        PolicyEngine { rules: pf.rules }
+        PolicyEngine { rules: pf.rules, loaded_files: vec![] }
     }
 
     #[test]
@@ -520,7 +546,7 @@ rules:
         let base_pf: PolicyFile = serde_yaml::from_str(yaml_base).unwrap();
         let override_pf: PolicyFile = serde_yaml::from_str(yaml_override).unwrap();
         let merged = PolicyEngine::merge_rules(base_pf.rules, override_pf.rules);
-        let engine = PolicyEngine { rules: merged };
+        let engine = PolicyEngine { rules: merged, loaded_files: vec![] };
 
         assert_eq!(engine.rule_count(), 1);
         assert_eq!(engine.rules[0].description, "user override");
@@ -548,7 +574,7 @@ rules:
         let base_pf: PolicyFile = serde_yaml::from_str(yaml_base).unwrap();
         let user_pf: PolicyFile = serde_yaml::from_str(yaml_user).unwrap();
         let merged = PolicyEngine::merge_rules(base_pf.rules, user_pf.rules);
-        let engine = PolicyEngine { rules: merged };
+        let engine = PolicyEngine { rules: merged, loaded_files: vec![] };
 
         assert_eq!(engine.rule_count(), 2);
     }
@@ -2096,5 +2122,24 @@ rules:
         assert!(verdict.rule_name == "detect-paste-service-fetch" ||
                 verdict.rule_name == "block-data-exfiltration",
                 "Expected paste-service or data-exfil rule, got: {}", verdict.rule_name);
+    }
+
+    #[test]
+    fn test_policy_file_info_populated_on_load() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("test.yaml"), sample_yaml()).unwrap();
+        let engine = PolicyEngine::load(dir.path()).unwrap();
+        let info = engine.file_info();
+        assert_eq!(info.len(), 1);
+        assert_eq!(info[0].filename, "test.yaml");
+        assert_eq!(info[0].rules_count, 4); // sample_yaml has 4 rules
+        assert_eq!(info[0].sha256.len(), 64); // SHA-256 hex = 64 chars
+    }
+
+    #[test]
+    fn test_policy_file_info_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = PolicyEngine::load(dir.path()).unwrap();
+        assert!(engine.file_info().is_empty());
     }
 }
