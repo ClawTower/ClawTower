@@ -72,6 +72,9 @@ pub struct Alert {
     /// Name of the skill/tool that triggered this alert (if known)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skill_name: Option<String>,
+    /// Version of the IOC database that triggered this alert (if applicable)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ioc_version: Option<String>,
 }
 
 impl Alert {
@@ -84,6 +87,7 @@ impl Alert {
             message: message.to_string(),
             agent_name: None,
             skill_name: None,
+            ioc_version: None,
         }
     }
 
@@ -96,6 +100,12 @@ impl Alert {
     /// Attach a skill name to this alert.
     pub fn with_skill(mut self, skill: &str) -> Self {
         self.skill_name = Some(skill.to_string());
+        self
+    }
+
+    /// Attach the IOC database version that triggered this alert.
+    pub fn with_ioc_version(mut self, version: &str) -> Self {
+        self.ioc_version = Some(version.to_string());
         self
     }
 }
@@ -216,5 +226,18 @@ mod tests {
         let output = format!("{}", alert);
         assert!(output.contains("(agent: openclaw)"));
         assert!(output.contains("(skill: web-search)"));
+    }
+
+    #[test]
+    fn test_alert_with_ioc_version() {
+        let alert = Alert::new(Severity::Critical, "secureclaw", "test")
+            .with_ioc_version("1.2.3");
+        assert_eq!(alert.ioc_version, Some("1.2.3".to_string()));
+    }
+
+    #[test]
+    fn test_alert_ioc_version_default_none() {
+        let alert = Alert::new(Severity::Info, "test", "no version");
+        assert!(alert.ioc_version.is_none());
     }
 }
