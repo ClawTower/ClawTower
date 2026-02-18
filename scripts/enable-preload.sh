@@ -12,6 +12,13 @@ SERVICE_FILE="/etc/systemd/system/clawtower.service"
 
 [[ $EUID -eq 0 ]] || { echo "[ERROR] Must run as root"; exit 1; }
 
+# chattr wrapper: falls back to systemd-run when CAP_LINUX_IMMUTABLE is missing
+do_chattr() {
+    local flag="$1" path="$2"
+    if chattr "$flag" "$path" 2>/dev/null; then return 0; fi
+    systemd-run --wait --collect --quiet chattr "$flag" "$path" 2>/dev/null
+}
+
 # ── 1. Install shared library ────────────────────────────────────────────────
 echo "[PRELOAD] Installing libclawguard.so..."
 mkdir -p "$LIB_DIR"
@@ -43,7 +50,7 @@ fi
 echo "[PRELOAD] Configuring systemd environment..."
 if [ -f "$SERVICE_FILE" ]; then
     # Remove immutable flag temporarily if set
-    chattr -i "$SERVICE_FILE" 2>/dev/null || true
+    do_chattr -i "$SERVICE_FILE" || true
 
     if ! grep -q "LD_PRELOAD" "$SERVICE_FILE"; then
         # Add Environment line after [Service] section
@@ -54,7 +61,7 @@ if [ -f "$SERVICE_FILE" ]; then
     fi
 
     # Restore immutable flag
-    chattr +i "$SERVICE_FILE" 2>/dev/null || true
+    do_chattr +i "$SERVICE_FILE" || true
     systemctl daemon-reload
 else
     echo "[PRELOAD] Service file not found — LD_PRELOAD must be configured manually"
@@ -62,7 +69,7 @@ fi
 
 # ── 4. Make .so immutable ─────────────────────────────────────────────────────
 echo "[PRELOAD] Setting immutable flag on libclawguard.so..."
-chattr +i "$SO_FILE" 2>/dev/null || echo "[WARN] chattr +i failed (filesystem may not support it)"
+do_chattr +i "$SO_FILE" || echo "[WARN] chattr +i failed (filesystem may not support it)"
 
 echo "[PRELOAD] Installation complete!"
 echo "  Library: $SO_FILE"

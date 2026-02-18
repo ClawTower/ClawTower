@@ -212,9 +212,12 @@ The P0 sentinel skills loop (2,748 Critical alerts) is addressed on the `fix/sen
 
 **Estimated impact:** 2,748 Critical sentinel alerts → **~40** (98.5% reduction). The remaining ~40 are legitimate content scan hits on non-excluded paths.
 
-### Planned Scanner Deduplication
+### Scanner Deduplication (Implemented)
 
-Scanner results that persist across cycles (immutable flags missing, apparmor not loaded, etc.) generate repeat alerts every scan interval. Planned fix:
+Scanner results that persist across cycles (immutable flags missing, apparmor not loaded, etc.) are now deduplicated in `run_periodic_scans()` before entering the alert pipeline.
 
-- **24-hour scan dedup** — Same category + same status results suppressed for 24 hours after first alert.
-- **Estimated impact:** 45 persistent scanner warnings per 18h → **~4/day** (one per unique finding per day).
+- **Fingerprinting** — findings are keyed by category + normalized details (digits normalized), not only category+status.
+- **Configurable window** — suppression uses `[scans].dedup_interval_secs` (default: `3600`).
+- **Resolution signal** — when a previously active finding disappears, a `[RESOLVED]` Info alert is emitted.
+
+This reduces repeat scanner noise while preserving signal on state changes and recoveries.

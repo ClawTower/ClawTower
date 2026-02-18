@@ -1,0 +1,38 @@
+# ClawTower Profile: enterprise-strict
+#
+# Maximum security posture — short scan intervals, incident-mode-like
+# aggregation, all sources enabled, Slack at Info+.
+# Use: clawtower run --profile=enterprise-strict
+
+[general]
+min_alert_level = "info"
+
+[scans]
+interval = 1800
+persistence_interval = 120
+
+[slack]
+min_slack_level = "info"
+heartbeat_interval = 1800
+
+[auto_update]
+enabled = true
+interval = 120
+mode = "auto"
+
+[sentinel]
+enabled = true
+
+[ssh]
+enabled = true
+
+[policy]
+enabled = true
+
+[secureclaw]
+enabled = true
+
+[incident_mode]
+dedup_window_secs = 5
+scan_dedup_window_secs = 120
+rate_limit_per_source = 100

@@ -152,7 +152,7 @@ Each path in `watch_paths` has a **policy** that determines what happens when th
 | Policy | On Change | Alert Level | Use Case |
 |---|---|---|---|
 | `protected` | Quarantine modified file, restore from shadow | **Critical** | Identity files that should never change at runtime (`SOUL.md`, `AGENTS.md`, `IDENTITY.md`) |
-| `watched` | Update shadow copy to new content | **Info** | Mutable working files that legitimately change (`MEMORY.md`, logs, notes) |
+| `watched` | Update shadow copy to new content | **Info** | Mutable working files that legitimately change (`HEARTBEAT.md`, `TOOLS.md`, logs, notes) |
 
 **Exception:** If `scan_content` is enabled and SecureClaw detects a threat in a *watched* file, the file is quarantined and restored **regardless of policy**. Threat detection always wins.
 
@@ -314,19 +314,24 @@ This prevents false positives from files that legitimately contain credential-li
 
 ## Scan Deduplication
 
-Periodic security scans (run by `scanner.rs`) can report the same finding every cycle, generating noise. The Sentinel deduplicates scan results to suppress repeated identical findings.
+Periodic security scans (run by `scanner.rs`) can report the same finding every cycle, generating noise. Scanner-level deduplication suppresses repeated identical findings before they enter the alert pipeline.
 
 ### How It Works
 
-In `run_periodic_scans()`, each scan result is keyed as `"{category}:{status}"`. A `HashMap<String, Instant>` tracks when each key was last reported:
+In `run_periodic_scans()`, each non-passing finding is fingerprinted as:
 
-- **Same key within 24 hours** — suppressed (not forwarded to the alert pipeline)
-- **Status changes** — fire immediately, because the status is part of the key (e.g., `"ssh_config:WARN"` → `"ssh_config:CRIT"` is a new key)
-- **After 24 hours** — the finding is reported again, resetting the timer
+`"{category}:{normalized_details}"` (digits normalized to `#`)
+
+A `HashMap<String, Instant>` tracks when each fingerprint was last reported:
+
+- **Same fingerprint within `[scans].dedup_interval_secs`** — suppressed (not forwarded)
+- **Changed details/status** — typically produce a new fingerprint and alert immediately
+- **After dedup interval** — persistent finding is reported again, resetting its timer
+- **Resolution** — when a previously active fingerprint disappears, an Info `[RESOLVED]` alert is emitted
 
 ### Effect
 
-This dramatically reduces alert volume from scanners that repeatedly report stable conditions (e.g., "SSH password auth is enabled" every 5 minutes). Genuine state transitions always surface immediately.
+This dramatically reduces alert volume from scanners that repeatedly report stable conditions while preserving visibility on state transitions and recoveries.
 
 ---
 
@@ -379,9 +384,15 @@ path = "/home/openclaw/.openclaw/workspace/AGENTS.md"
 patterns = ["*"]
 policy = "protected"
 
-# Watched mutable files — track changes, update shadow
+# Protected memory file — quarantine + restore on any change
 [[sentinel.watch_paths]]
 path = "/home/openclaw/.openclaw/workspace/MEMORY.md"
+patterns = ["*"]
+policy = "protected"
+
+# Watched mutable files — track changes, update shadow
+[[sentinel.watch_paths]]
+path = "/home/openclaw/.openclaw/workspace/HEARTBEAT.md"
 patterns = ["*"]
 policy = "watched"
 ```
@@ -394,7 +405,13 @@ Out of the box, the Sentinel watches:
 |---|---|
 | `~/.openclaw/workspace/SOUL.md` | Protected |
 | `~/.openclaw/workspace/AGENTS.md` | Protected |
-| `~/.openclaw/workspace/MEMORY.md` | Watched |
+| `~/.openclaw/workspace/MEMORY.md` | Protected |
+| `~/.openclaw/workspace/HEARTBEAT.md` | Watched |
+| `~/.openclaw/workspace/TOOLS.md` | Watched |
+
+Additional defaults also include OpenClaw credentials/config paths, shell/profile
+files commonly used for persistence, selected startup locations (systemd user
+units/autostart/git hooks), and targeted system/user spool paths.
 
 ### Adding Custom Watch Paths
 

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 use crate::auditd::{Actor, ParsedEvent};
 use crate::behavior::{self, BehaviorCategory};
 use crate::detect::traits::{AlertProposal, DetectionEvent, Detector};

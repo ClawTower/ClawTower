@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! Cognitive file integrity monitoring for AI agent identity files.
 //!
 //! Maintains SHA-256 baselines of critical workspace files (SOUL.md, AGENTS.md,

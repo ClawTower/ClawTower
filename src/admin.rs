@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! Admin socket and key management for authenticated ClawTower control.
 //!
 //! Provides a Unix domain socket (`/var/run/clawtower/admin.sock`) that accepts
@@ -174,10 +177,19 @@ pub fn generate_and_show_admin_key(hash_path: &Path) -> Result<bool> {
     std::fs::write(hash_path, &hash)
         .with_context(|| format!("Failed to write key hash to {}", hash_path.display()))?;
 
-    // Make the hash file immutable to prevent tampering
-    let _ = std::process::Command::new("chattr")
-        .args(["+i", &hash_path.to_string_lossy()])
-        .status();
+    // Make the hash file immutable to prevent tampering.
+    // Try direct chattr first, fall back to systemd-run (for dropped CAP_LINUX_IMMUTABLE).
+    let path_str = hash_path.to_string_lossy();
+    if !std::process::Command::new("chattr")
+        .args(["+i", &*path_str])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+    {
+        let _ = std::process::Command::new("systemd-run")
+            .args(["--wait", "--collect", "--quiet", "chattr", "+i", &*path_str])
+            .status();
+    }
 
     eprintln!();
     eprintln!("╔══════════════════════════════════════════════════════════════╗");
@@ -446,6 +458,75 @@ async fn process_request(
                 data: None,
             }
         }
+        "incident-mode" => {
+            let action = req.args.get("action")
+                .and_then(|v| v.as_str())
+                .unwrap_or("status");
+
+            const INCIDENT_FILE: &str = "/var/run/clawtower/incident-mode.active";
+            const LOCK_FILE: &str = "/var/run/clawtower/clawsudo.locked";
+
+            match action {
+                "activate" => {
+                    let _ = std::fs::create_dir_all("/var/run/clawtower");
+                    let _ = std::fs::write(INCIDENT_FILE, "activated via admin socket\n");
+
+                    let lock_clawsudo = req.args.get("lock_clawsudo")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true);
+                    if lock_clawsudo {
+                        let _ = std::fs::write(LOCK_FILE, "locked by incident mode\n");
+                    }
+
+                    let _ = alert_tx
+                        .send(Alert::new(
+                            Severity::Critical,
+                            "admin",
+                            "INCIDENT MODE ACTIVATED — aggregation tightened, clawsudo locked",
+                        ))
+                        .await;
+
+                    AdminResponse {
+                        ok: true,
+                        message: "Incident mode activated".into(),
+                        data: Some(serde_json::json!({
+                            "clawsudo_locked": lock_clawsudo,
+                        })),
+                    }
+                }
+                "deactivate" => {
+                    let _ = std::fs::remove_file(INCIDENT_FILE);
+                    let _ = std::fs::remove_file(LOCK_FILE);
+
+                    let _ = alert_tx
+                        .send(Alert::new(
+                            Severity::Warning,
+                            "admin",
+                            "Incident mode deactivated — returning to normal aggregation",
+                        ))
+                        .await;
+
+                    AdminResponse {
+                        ok: true,
+                        message: "Incident mode deactivated".into(),
+                        data: None,
+                    }
+                }
+                _ => {
+                    // status (default)
+                    let active = Path::new(INCIDENT_FILE).exists();
+                    let clawsudo_locked = Path::new(LOCK_FILE).exists();
+                    AdminResponse {
+                        ok: true,
+                        message: if active { "Incident mode is ACTIVE".into() } else { "Incident mode is inactive".into() },
+                        data: Some(serde_json::json!({
+                            "active": active,
+                            "clawsudo_locked": clawsudo_locked,
+                        })),
+                    }
+                }
+            }
+        }
         other => AdminResponse {
             ok: false,
             message: format!("Unknown command: {}", other),
@@ -687,5 +768,22 @@ mod tests {
         let req: AdminRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.command, "scan");
         assert!(req.args.is_null());
+    }
+
+    #[test]
+    fn test_incident_mode_request_parsing() {
+        let json = r#"{"key": "OCAV-abc", "command": "incident-mode", "args": {"action": "activate", "lock_clawsudo": true}}"#;
+        let req: AdminRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.command, "incident-mode");
+        assert_eq!(req.args["action"], "activate");
+        assert_eq!(req.args["lock_clawsudo"], true);
+    }
+
+    #[test]
+    fn test_incident_mode_status_request() {
+        let json = r#"{"key": "OCAV-abc", "command": "incident-mode", "args": {"action": "status"}}"#;
+        let req: AdminRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.command, "incident-mode");
+        assert_eq!(req.args["action"], "status");
     }
 }

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! Firewall state monitor.
 //!
 //! Captures a baseline of the available firewall backend, then polls every 30

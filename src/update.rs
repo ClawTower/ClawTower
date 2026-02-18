@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! Self-update subcommand: `clawtower update`
 //!
 //! 1. Prompts for admin key (or accepts --key flag)

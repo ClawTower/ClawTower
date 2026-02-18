@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! Network log parser for iptables/netfilter entries.
 //!
 //! Parses iptables log lines from syslog or kernel messages, extracting SRC, DST,

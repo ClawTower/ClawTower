@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! Response Engine — automated threat containment with human approval.
 //!
 //! Evaluates alerts against playbooks, creates pending actions, and waits for

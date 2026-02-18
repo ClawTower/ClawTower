@@ -18,6 +18,16 @@ log()  { echo -e "${GREEN}[INSTALL]${NC} $*"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 die()  { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
+# chattr wrapper: tries direct chattr first, falls back to systemd-run
+# (bypasses dropped CAP_LINUX_IMMUTABLE in the current session's bounding set)
+do_chattr() {
+    local flag="$1" path="$2"
+    if chattr "$flag" "$path" 2>/dev/null; then
+        return 0
+    fi
+    systemd-run --wait --collect --quiet chattr "$flag" "$path" 2>/dev/null
+}
+
 [[ $EUID -eq 0 ]] || die "Must run as root"
 
 # Binary: if already installed (e.g. via deploy.sh), keep it — don't overwrite
@@ -43,11 +53,17 @@ fi
 log "Installing binary and config..."
 systemctl stop clawtower 2>/dev/null || true
 sleep 0.5
+# Temporarily unload AppArmor protection profiles so cp/chattr can touch protected paths.
+# These deny rules block even root. Step 5 reloads them after all modifications are done.
+if command -v apparmor_parser &>/dev/null && [ -f /etc/apparmor.d/etc.clawtower.protect ]; then
+    apparmor_parser -R /etc/apparmor.d/etc.clawtower.protect 2>/dev/null || true
+    log "Temporarily unloaded AppArmor protection profiles"
+fi
 # Strip immutable flags from all protected files before touching them
-chattr -i /usr/local/bin/clawtower 2>/dev/null || true
-chattr -i /etc/clawtower/config.toml 2>/dev/null || true
-chattr -i /etc/clawtower/admin.key.hash 2>/dev/null || true
-chattr -i /etc/systemd/system/clawtower.service 2>/dev/null || true
+do_chattr -i /usr/local/bin/clawtower || true
+do_chattr -i /etc/clawtower/config.toml || true
+do_chattr -i /etc/clawtower/admin.key.hash || true
+do_chattr -i /etc/systemd/system/clawtower.service || true
 # Create dirs after stop (systemd RuntimeDirectory cleanup deletes /var/run/clawtower)
 mkdir -p /etc/clawtower /var/log/clawtower /var/run/clawtower
 if [[ $SKIP_BINARY_INSTALL -eq 0 ]]; then
@@ -102,7 +118,7 @@ systemctl enable clawtower
 log "Setting immutable attributes (chattr +i)..."
 for f in /usr/local/bin/clawtower /etc/systemd/system/clawtower.service; do
     if [[ -f "$f" ]]; then
-        chattr +i "$f" && log "  chattr +i $f — OK" || warn "  chattr +i $f — FAILED"
+        do_chattr +i "$f" && log "  chattr +i $f — OK" || warn "  chattr +i $f — FAILED"
     else
         warn "  $f not found, skipping chattr"
     fi
@@ -160,13 +176,15 @@ cat > /etc/security/capability.conf <<'CAPCONF'
 !cap_sys_module       openclaw
 CAPCONF
 
-# Also ensure pam_cap is in the login stack
-if ! grep -q pam_cap /etc/pam.d/common-auth 2>/dev/null; then
-    if [ -f /lib/security/pam_cap.so ] || [ -f /lib/aarch64-linux-gnu/security/pam_cap.so ]; then
-        echo "auth    optional    pam_cap.so" >> /etc/pam.d/common-auth
-    else
-        warn "pam_cap.so not found — install libpam-cap for capability restrictions"
-    fi
+# NOTE: pam_cap was previously added to /etc/pam.d/common-auth, but this
+# caused CAP_LINUX_IMMUTABLE to be dropped from ALL user sessions (not just
+# openclaw), breaking chattr and making re-harden impossible. Removed.
+# Defense layers that remain: AppArmor deny capability, clawsudo deny rules,
+# chattr +i on files, kernel.modules_disabled=1.
+# Clean up stale pam_cap entry from previous installs:
+if grep -q pam_cap /etc/pam.d/common-auth 2>/dev/null; then
+    sed -i '/pam_cap/d' /etc/pam.d/common-auth
+    log "  Removed stale pam_cap.so from /etc/pam.d/common-auth"
 fi
 
 # ── 6b. Disable unnecessary services ─────────────────────────────────────────
@@ -231,17 +249,17 @@ done < /etc/sysctl.d/99-clawtower.conf
 log "Installing hardened sudoers from policies/sudoers-openclaw.conf..."
 # Remove old deny-list approach if present
 if [[ -f /etc/sudoers.d/clawtower-deny ]]; then
-    chattr -i /etc/sudoers.d/clawtower-deny 2>/dev/null || true
+    do_chattr -i /etc/sudoers.d/clawtower-deny || true
     rm -f /etc/sudoers.d/clawtower-deny
 fi
 SUDOERS_SRC="$(dirname "$(realpath "$0")")/../policies/sudoers-openclaw.conf"
 SUDOERS_DEST="/etc/sudoers.d/010_openclaw"
-chattr -i "$SUDOERS_DEST" 2>/dev/null || true
+do_chattr -i "$SUDOERS_DEST" || true
 cp "$SUDOERS_SRC" "$SUDOERS_DEST"
 chmod 0440 "$SUDOERS_DEST"
 # Validate sudoers
 visudo -cf "$SUDOERS_DEST" || die "Invalid sudoers file!"
-chattr +i "$SUDOERS_DEST"
+do_chattr +i "$SUDOERS_DEST" || warn "chattr +i $SUDOERS_DEST — FAILED"
 
 # ── 9. Lock audit rules ─────────────────────────────────────────────────────
 log "Locking audit rules (immutable until reboot)..."
@@ -277,7 +295,7 @@ echo ""
 
 # ── 12. Build and install LD_PRELOAD guard ────────────────────────────────
 log "Building and installing LD_PRELOAD syscall interception..."
-chattr -i /usr/local/lib/clawtower/libclawguard.so 2>/dev/null || true
+do_chattr -i /usr/local/lib/clawtower/libclawguard.so || true
 PRELOAD_SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 if [ -f "$PRELOAD_SCRIPT_DIR/build-preload.sh" ]; then
     bash "$PRELOAD_SCRIPT_DIR/build-preload.sh"

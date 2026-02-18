@@ -1,0 +1,68 @@
+# ClawTower Agent Profile: Generic Template
+#
+# Copy this file and customize for your AI agent. Uncomment and edit
+# the sections relevant to your agent's filesystem layout.
+#
+# Usage:
+#   cp agents.d/generic.toml agents.d/my-agent.toml
+#   # Edit my-agent.toml with your agent's paths
+#   # Restart ClawTower to pick up the new profile
+
+[agent]
+name = "my-agent"            # Human-readable name for alerts
+user = "agentuser"           # Unix username the agent runs as
+home_dir = "/home/agentuser" # Agent's home directory
+workspace_dir = "/home/agentuser/workspace"  # Where identity files live
+
+# ── Cognitive identity files ─────────────────────────────────────────
+# Protected: Critical alert + quarantine on modification
+# Watched: Info alert + diff + auto-rebaseline
+#
+# Use {workspace} and {home} as path placeholders.
+#
+# [identity_files]
+# protected = [
+#     "{workspace}/SOUL.md",
+#     "{workspace}/IDENTITY.md",
+# ]
+# watched = [
+#     "{workspace}/MEMORY.md",
+# ]
+
+# ── Sensitive paths ──────────────────────────────────────────────────
+# Protected: quarantine + restore on change
+# Watched: alert + shadow update
+#
+# [[sensitive_paths.protected]]
+# path = "{home}/.my-agent/credentials"
+# patterns = ["*.json", "*.key"]
+#
+# [[sensitive_paths.watched]]
+# path = "{home}/.my-agent/config"
+# patterns = ["*.yaml", "*.toml"]
+
+# ── Skill/plugin directories ────────────────────────────────────────
+# [[skill_paths.watch]]
+# path = "{workspace}/plugins"
+# patterns = ["manifest.json"]
+
+# ── Persistence paths ────────────────────────────────────────────────
+# Shell files and directories where the agent could install persistence.
+#
+# [persistence_paths]
+# shell_files = [
+#     "{home}/.bashrc",
+#     "{home}/.profile",
+# ]
+#
+# [[persistence_paths.directories]]
+# path = "{home}/.config/systemd/user"
+# patterns = ["*.service", "*.timer"]
+#
+# [[persistence_paths.directories]]
+# path = "/var/spool/cron/crontabs"
+# patterns = ["*"]
+
+# ── Network expectations (informational) ─────────────────────────────
+# [network]
+# expected_hosts = ["api.example.com"]

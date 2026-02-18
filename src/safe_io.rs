@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! Symlink-safe file I/O utilities.
 //!
 //! Provides hardened file operations that prevent TOCTOU races, symlink attacks,

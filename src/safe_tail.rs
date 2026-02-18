@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! Resilient async log file tailer with security hardening.
 //!
 //! [`SafeTailer`] provides a fail-closed, symlink-safe, rotation-aware file

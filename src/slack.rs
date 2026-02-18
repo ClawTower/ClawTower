@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! Slack webhook notification sender.
 //!
 //! Sends formatted alerts to Slack via incoming webhooks. Supports primary and

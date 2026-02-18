@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! Boundary-aware string matching utilities for security-critical comparisons.
 //!
 //! This module provides safe matching functions that prevent substring-based

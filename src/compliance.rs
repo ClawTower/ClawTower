@@ -1,0 +1,840 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
+//! Compliance report generation for ClawTower.
+//!
+//! Maps ClawTower alert sources and categories to compliance framework controls
+//! (SOC 2, NIST 800-53, CIS Controls v8) and generates structured reports
+//! suitable for audit evidence and compliance reviews.
+//!
+//! # Supported Frameworks
+//!
+//! - **SOC 2** — Trust Services Criteria (CC series)
+//! - **NIST 800-53** — Security and Privacy Controls
+//! - **CIS Controls v8** — Center for Internet Security benchmarks
+//!
+//! # Usage
+//!
+//! ```text
+//! clawtower compliance-report --framework=soc2 --period=30d --format=json --output=report.json
+//! ```
+//!
+//! Reports can be generated even without a running ClawTower instance — an empty
+//! data set produces a baseline report showing all controls in `Pass` status.
+
+use chrono::{DateTime, Local};
+use serde::Serialize;
+
+// ---------------------------------------------------------------------------
+// Control mapping: static table of ClawTower category → framework controls
+// ---------------------------------------------------------------------------
+
+/// Maps a ClawTower alert category to compliance framework control IDs.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct ControlMapping {
+    pub clawtower_category: &'static str,
+    pub soc2_controls: &'static [&'static str],
+    pub nist_controls: &'static [&'static str],
+    pub cis_controls: &'static [&'static str],
+}
+
+/// All known control mappings between ClawTower categories and compliance frameworks.
+#[allow(dead_code)]
+pub static CONTROL_MAPPINGS: &[ControlMapping] = &[
+    ControlMapping {
+        clawtower_category: "behavior:data_exfiltration",
+        soc2_controls: &["CC6.1", "CC7.2"],
+        nist_controls: &["SC-7", "SI-4"],
+        cis_controls: &["13.1"],
+    },
+    ControlMapping {
+        clawtower_category: "behavior:privilege_escalation",
+        soc2_controls: &["CC6.1", "CC6.3"],
+        nist_controls: &["AC-6", "AU-12"],
+        cis_controls: &["5.4"],
+    },
+    ControlMapping {
+        clawtower_category: "sentinel:file_integrity",
+        soc2_controls: &["CC8.1"],
+        nist_controls: &["SI-7"],
+        cis_controls: &["3.14"],
+    },
+    ControlMapping {
+        clawtower_category: "scan:firewall_status",
+        soc2_controls: &["CC6.6"],
+        nist_controls: &["SC-7"],
+        cis_controls: &["4.8"],
+    },
+    ControlMapping {
+        clawtower_category: "capability:envelope_violation",
+        soc2_controls: &["CC6.1", "CC6.8"],
+        nist_controls: &["AC-3", "AC-25"],
+        cis_controls: &["6.1"],
+    },
+    ControlMapping {
+        clawtower_category: "audit_chain:tamper_detected",
+        soc2_controls: &["CC7.2", "CC7.3"],
+        nist_controls: &["AU-9", "AU-10"],
+        cis_controls: &["8.11"],
+    },
+    ControlMapping {
+        clawtower_category: "behavior:reconnaissance",
+        soc2_controls: &["CC6.1"],
+        nist_controls: &["SI-4"],
+        cis_controls: &["13.3"],
+    },
+    ControlMapping {
+        clawtower_category: "behavior:persistence",
+        soc2_controls: &["CC7.2"],
+        nist_controls: &["SI-3", "SI-7"],
+        cis_controls: &["2.7"],
+    },
+    ControlMapping {
+        clawtower_category: "behavior:container_escape",
+        soc2_controls: &["CC6.1", "CC6.6"],
+        nist_controls: &["SC-7", "CM-7"],
+        cis_controls: &["16.1"],
+    },
+    ControlMapping {
+        clawtower_category: "scan:suid_binaries",
+        soc2_controls: &["CC6.1"],
+        nist_controls: &["AC-6"],
+        cis_controls: &["5.4"],
+    },
+];
+
+// ---------------------------------------------------------------------------
+// Report types
+// ---------------------------------------------------------------------------
+
+/// A completed compliance report for a specific framework and time period.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize)]
+pub struct ComplianceReport {
+    pub framework: String,
+    pub period_days: u32,
+    pub generated_at: DateTime<Local>,
+    pub total_alerts: u64,
+    pub alerts_by_severity: AlertSeveritySummary,
+    pub control_findings: Vec<ControlFinding>,
+    pub scanner_summary: ScannerSummary,
+}
+
+/// Breakdown of total alerts by severity level.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize)]
+pub struct AlertSeveritySummary {
+    pub critical: u64,
+    pub warning: u64,
+    pub info: u64,
+}
+
+/// A single control finding within the compliance report.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize)]
+pub struct ControlFinding {
+    pub control_id: String,
+    pub control_name: String,
+    pub alert_count: u64,
+    pub highest_severity: String,
+    pub status: FindingStatus,
+    pub categories: Vec<String>,
+}
+
+/// Status of a compliance control finding.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum FindingStatus {
+    /// No alerts mapped to this control
+    Pass,
+    /// Warning-level alerts mapped to this control
+    Finding,
+    /// Critical-level alerts mapped to this control
+    Critical,
+}
+
+impl std::fmt::Display for FindingStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FindingStatus::Pass => write!(f, "Pass"),
+            FindingStatus::Finding => write!(f, "Finding"),
+            FindingStatus::Critical => write!(f, "Critical"),
+        }
+    }
+}
+
+/// Summary of periodic security scanner results.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize)]
+pub struct ScannerSummary {
+    pub total_scans: u64,
+    pub pass_count: u64,
+    pub warn_count: u64,
+    pub fail_count: u64,
+}
+
+// ---------------------------------------------------------------------------
+// Well-known control names per framework
+// ---------------------------------------------------------------------------
+
+/// Human-readable control names for SOC 2 controls.
+#[allow(dead_code)]
+fn soc2_control_name(id: &str) -> &'static str {
+    match id {
+        "CC6.1" => "Logical and Physical Access Controls",
+        "CC6.3" => "Role-Based Access and Least Privilege",
+        "CC6.6" => "System Boundary Protection",
+        "CC6.8" => "Controls Against Unauthorized Software",
+        "CC7.2" => "Monitoring for Anomalies and Security Events",
+        "CC7.3" => "Evaluation of Security Events",
+        "CC8.1" => "Change Management Controls",
+        _ => "Unknown Control",
+    }
+}
+
+/// Human-readable control names for NIST 800-53 controls.
+#[allow(dead_code)]
+fn nist_control_name(id: &str) -> &'static str {
+    match id {
+        "AC-3" => "Access Enforcement",
+        "AC-6" => "Least Privilege",
+        "AC-25" => "Reference Monitor",
+        "AU-9" => "Protection of Audit Information",
+        "AU-10" => "Non-repudiation",
+        "AU-12" => "Audit Record Generation",
+        "CM-7" => "Least Functionality",
+        "SC-7" => "Boundary Protection",
+        "SI-3" => "Malicious Code Protection",
+        "SI-4" => "System Monitoring",
+        "SI-7" => "Software, Firmware, and Information Integrity",
+        _ => "Unknown Control",
+    }
+}
+
+/// Human-readable control names for CIS Controls v8.
+#[allow(dead_code)]
+fn cis_control_name(id: &str) -> &'static str {
+    match id {
+        "2.7" => "Allowlist Authorized Scripts",
+        "3.14" => "Log Sensitive Data Access",
+        "4.8" => "Uninstall or Disable Unnecessary Services",
+        "5.4" => "Restrict Administrator Privileges",
+        "6.1" => "Establish an Access Granting Process",
+        "8.11" => "Conduct Audit Log Reviews",
+        "13.1" => "Centralize Security Event Alerting",
+        "13.3" => "Deploy a Network Intrusion Detection Solution",
+        "16.1" => "Establish a Secure Application Development Process",
+        _ => "Unknown Control",
+    }
+}
+
+/// Return the control name lookup function for a given framework.
+#[allow(dead_code)]
+fn control_name_for_framework(framework: &str, id: &str) -> String {
+    let name = match framework {
+        "soc2" => soc2_control_name(id),
+        "nist-800-53" => nist_control_name(id),
+        "cis-v8" => cis_control_name(id),
+        _ => "Unknown Control",
+    };
+    name.to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/// Look up controls for a given ClawTower alert source/category.
+///
+/// Returns `None` if the category has no known compliance mapping.
+#[allow(dead_code)]
+pub fn lookup_controls(category: &str) -> Option<&'static ControlMapping> {
+    CONTROL_MAPPINGS
+        .iter()
+        .find(|m| m.clawtower_category == category)
+}
+
+/// Get all supported compliance framework identifiers.
+#[allow(dead_code)]
+pub fn supported_frameworks() -> &'static [&'static str] {
+    &["soc2", "nist-800-53", "cis-v8"]
+}
+
+/// Generate a compliance report from alert data.
+///
+/// # Arguments
+///
+/// * `framework` — One of `"soc2"`, `"nist-800-53"`, or `"cis-v8"`
+/// * `period_days` — Reporting period in days (e.g., 30)
+/// * `alert_summary` — Slice of `(source, severity, count)` tuples from alert history
+/// * `scanner_results` — Slice of `(category, status)` tuples where status is `"pass"`, `"warn"`, or `"fail"`
+#[allow(dead_code)]
+pub fn generate_report(
+    framework: &str,
+    period_days: u32,
+    alert_summary: &[(String, String, u64)],
+    scanner_results: &[(String, String)],
+) -> ComplianceReport {
+    // Tally alerts by severity
+    let mut critical_count: u64 = 0;
+    let mut warning_count: u64 = 0;
+    let mut info_count: u64 = 0;
+
+    for (_, severity, count) in alert_summary {
+        match severity.to_lowercase().as_str() {
+            "critical" | "crit" => critical_count += count,
+            "warning" | "warn" => warning_count += count,
+            _ => info_count += count,
+        }
+    }
+
+    let total_alerts = critical_count + warning_count + info_count;
+
+    // Collect all unique control IDs for the requested framework, tracking
+    // which ClawTower categories map to each control and the highest severity seen.
+    let mut control_map: std::collections::BTreeMap<
+        String,
+        (u64, String, FindingStatus, Vec<String>),
+    > = std::collections::BTreeMap::new();
+
+    // Seed all controls from the static mapping so every known control appears
+    for mapping in CONTROL_MAPPINGS {
+        let control_ids: &[&str] = match framework {
+            "soc2" => mapping.soc2_controls,
+            "nist-800-53" => mapping.nist_controls,
+            "cis-v8" => mapping.cis_controls,
+            _ => mapping.soc2_controls, // default to soc2
+        };
+        for &cid in control_ids {
+            control_map
+                .entry(cid.to_string())
+                .or_insert_with(|| (0, "none".to_string(), FindingStatus::Pass, Vec::new()));
+        }
+    }
+
+    // Map alert data to controls
+    for (source, severity, count) in alert_summary {
+        if let Some(mapping) = lookup_controls(source) {
+            let control_ids: &[&str] = match framework {
+                "soc2" => mapping.soc2_controls,
+                "nist-800-53" => mapping.nist_controls,
+                "cis-v8" => mapping.cis_controls,
+                _ => mapping.soc2_controls,
+            };
+
+            let sev_status = match severity.to_lowercase().as_str() {
+                "critical" | "crit" => FindingStatus::Critical,
+                "warning" | "warn" => FindingStatus::Finding,
+                _ => FindingStatus::Pass,
+            };
+
+            for &cid in control_ids {
+                let entry = control_map
+                    .entry(cid.to_string())
+                    .or_insert_with(|| (0, "none".to_string(), FindingStatus::Pass, Vec::new()));
+
+                entry.0 += count;
+
+                // Escalate status: Pass < Finding < Critical
+                match (&entry.2, &sev_status) {
+                    (FindingStatus::Pass, FindingStatus::Finding) => {
+                        entry.1 = severity.clone();
+                        entry.2 = FindingStatus::Finding;
+                    }
+                    (FindingStatus::Pass, FindingStatus::Critical) => {
+                        entry.1 = severity.clone();
+                        entry.2 = FindingStatus::Critical;
+                    }
+                    (FindingStatus::Finding, FindingStatus::Critical) => {
+                        entry.1 = severity.clone();
+                        entry.2 = FindingStatus::Critical;
+                    }
+                    _ => {}
+                }
+
+                if !entry.3.contains(source) {
+                    entry.3.push(source.clone());
+                }
+            }
+        }
+    }
+
+    // Build control findings
+    let control_findings: Vec<ControlFinding> = control_map
+        .into_iter()
+        .map(|(cid, (alert_count, highest_severity, status, categories))| {
+            let control_name = control_name_for_framework(framework, &cid);
+            ControlFinding {
+                control_id: cid,
+                control_name,
+                alert_count,
+                highest_severity: if status == FindingStatus::Pass {
+                    "none".to_string()
+                } else {
+                    highest_severity
+                },
+                status,
+                categories,
+            }
+        })
+        .collect();
+
+    // Build scanner summary
+    let mut pass_scans: u64 = 0;
+    let mut warn_scans: u64 = 0;
+    let mut fail_scans: u64 = 0;
+    for (_, status) in scanner_results {
+        match status.to_lowercase().as_str() {
+            "pass" => pass_scans += 1,
+            "warn" => warn_scans += 1,
+            "fail" => fail_scans += 1,
+            _ => {}
+        }
+    }
+
+    ComplianceReport {
+        framework: framework.to_string(),
+        period_days,
+        generated_at: Local::now(),
+        total_alerts,
+        alerts_by_severity: AlertSeveritySummary {
+            critical: critical_count,
+            warning: warning_count,
+            info: info_count,
+        },
+        control_findings,
+        scanner_summary: ScannerSummary {
+            total_scans: pass_scans + warn_scans + fail_scans,
+            pass_count: pass_scans,
+            warn_count: warn_scans,
+            fail_count: fail_scans,
+        },
+    }
+}
+
+/// Format a compliance report as a JSON string.
+#[allow(dead_code)]
+pub fn report_to_json(report: &ComplianceReport) -> String {
+    serde_json::to_string_pretty(report).unwrap_or_else(|e| {
+        format!("{{\"error\": \"Failed to serialize report: {}\"}}", e)
+    })
+}
+
+/// Format a compliance report as human-readable text.
+#[allow(dead_code)]
+pub fn report_to_text(report: &ComplianceReport) -> String {
+    let mut out = String::new();
+
+    // Header
+    out.push_str(&format!(
+        "ClawTower Compliance Report — {}\n",
+        framework_display_name(&report.framework)
+    ));
+    out.push_str(&"=".repeat(60));
+    out.push('\n');
+    out.push_str(&format!(
+        "Generated: {}\n",
+        report.generated_at.format("%Y-%m-%d %H:%M:%S %Z")
+    ));
+    out.push_str(&format!("Period: {} days\n", report.period_days));
+    out.push('\n');
+
+    // Alert summary
+    out.push_str("Alert Summary\n");
+    out.push_str(&"-".repeat(40));
+    out.push('\n');
+    out.push_str(&format!("  Total alerts:    {}\n", report.total_alerts));
+    out.push_str(&format!(
+        "  Critical:        {}\n",
+        report.alerts_by_severity.critical
+    ));
+    out.push_str(&format!(
+        "  Warning:         {}\n",
+        report.alerts_by_severity.warning
+    ));
+    out.push_str(&format!(
+        "  Info:            {}\n",
+        report.alerts_by_severity.info
+    ));
+    out.push('\n');
+
+    // Scanner summary
+    out.push_str("Scanner Summary\n");
+    out.push_str(&"-".repeat(40));
+    out.push('\n');
+    out.push_str(&format!(
+        "  Total scans:     {}\n",
+        report.scanner_summary.total_scans
+    ));
+    out.push_str(&format!(
+        "  Passed:          {}\n",
+        report.scanner_summary.pass_count
+    ));
+    out.push_str(&format!(
+        "  Warnings:        {}\n",
+        report.scanner_summary.warn_count
+    ));
+    out.push_str(&format!(
+        "  Failed:          {}\n",
+        report.scanner_summary.fail_count
+    ));
+    out.push('\n');
+
+    // Control findings
+    out.push_str("Control Findings\n");
+    out.push_str(&"-".repeat(60));
+    out.push('\n');
+
+    // Count findings by status
+    let pass_count = report
+        .control_findings
+        .iter()
+        .filter(|f| f.status == FindingStatus::Pass)
+        .count();
+    let finding_count = report
+        .control_findings
+        .iter()
+        .filter(|f| f.status == FindingStatus::Finding)
+        .count();
+    let critical_count = report
+        .control_findings
+        .iter()
+        .filter(|f| f.status == FindingStatus::Critical)
+        .count();
+
+    out.push_str(&format!(
+        "  {} controls assessed: {} Pass, {} Finding, {} Critical\n\n",
+        report.control_findings.len(),
+        pass_count,
+        finding_count,
+        critical_count,
+    ));
+
+    // List non-pass findings first, then pass
+    for finding in &report.control_findings {
+        if finding.status != FindingStatus::Pass {
+            out.push_str(&format!(
+                "  [{}] {} — {}\n",
+                finding.status, finding.control_id, finding.control_name
+            ));
+            out.push_str(&format!(
+                "         Alerts: {}  Highest: {}\n",
+                finding.alert_count, finding.highest_severity
+            ));
+            if !finding.categories.is_empty() {
+                out.push_str(&format!(
+                    "         Sources: {}\n",
+                    finding.categories.join(", ")
+                ));
+            }
+            out.push('\n');
+        }
+    }
+
+    // Passing controls (compact)
+    let passing: Vec<&ControlFinding> = report
+        .control_findings
+        .iter()
+        .filter(|f| f.status == FindingStatus::Pass)
+        .collect();
+    if !passing.is_empty() {
+        out.push_str("  Passing controls:\n");
+        for finding in passing {
+            out.push_str(&format!(
+                "    [Pass] {} — {}\n",
+                finding.control_id, finding.control_name
+            ));
+        }
+    }
+
+    out
+}
+
+/// Return a human-readable display name for a framework identifier.
+#[allow(dead_code)]
+fn framework_display_name(framework: &str) -> &str {
+    match framework {
+        "soc2" => "SOC 2 Type II",
+        "nist-800-53" => "NIST 800-53 Rev 5",
+        "cis-v8" => "CIS Controls v8",
+        _ => framework,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_lookup_controls_data_exfil() {
+        let mapping = lookup_controls("behavior:data_exfiltration");
+        assert!(mapping.is_some(), "data_exfiltration should have a mapping");
+        let m = mapping.unwrap();
+        assert!(
+            m.soc2_controls.contains(&"CC6.1"),
+            "SOC2 should include CC6.1"
+        );
+        assert!(
+            m.soc2_controls.contains(&"CC7.2"),
+            "SOC2 should include CC7.2"
+        );
+        assert!(
+            m.nist_controls.contains(&"SC-7"),
+            "NIST should include SC-7"
+        );
+        assert!(
+            m.nist_controls.contains(&"SI-4"),
+            "NIST should include SI-4"
+        );
+        assert!(
+            m.cis_controls.contains(&"13.1"),
+            "CIS should include 13.1"
+        );
+    }
+
+    #[test]
+    fn test_lookup_controls_unknown() {
+        let mapping = lookup_controls("nonexistent:category");
+        assert!(mapping.is_none(), "unknown category should return None");
+    }
+
+    #[test]
+    fn test_supported_frameworks() {
+        let frameworks = supported_frameworks();
+        assert_eq!(frameworks.len(), 3);
+        assert!(frameworks.contains(&"soc2"));
+        assert!(frameworks.contains(&"nist-800-53"));
+        assert!(frameworks.contains(&"cis-v8"));
+    }
+
+    #[test]
+    fn test_generate_empty_report() {
+        let report = generate_report("soc2", 30, &[], &[]);
+        assert_eq!(report.framework, "soc2");
+        assert_eq!(report.period_days, 30);
+        assert_eq!(report.total_alerts, 0);
+        assert_eq!(report.alerts_by_severity.critical, 0);
+        assert_eq!(report.alerts_by_severity.warning, 0);
+        assert_eq!(report.alerts_by_severity.info, 0);
+        // All controls should be Pass when no alerts
+        for finding in &report.control_findings {
+            assert_eq!(
+                finding.status,
+                FindingStatus::Pass,
+                "control {} should be Pass with no alerts",
+                finding.control_id
+            );
+        }
+        // Should have seeded controls from static mapping
+        assert!(
+            !report.control_findings.is_empty(),
+            "empty report should still list all known controls"
+        );
+    }
+
+    #[test]
+    fn test_generate_report_with_criticals() {
+        let alerts = vec![(
+            "behavior:data_exfiltration".to_string(),
+            "critical".to_string(),
+            5u64,
+        )];
+        let report = generate_report("soc2", 7, &alerts, &[]);
+        assert_eq!(report.total_alerts, 5);
+        assert_eq!(report.alerts_by_severity.critical, 5);
+
+        // CC6.1 and CC7.2 should be Critical (data_exfiltration maps to both)
+        let cc61 = report
+            .control_findings
+            .iter()
+            .find(|f| f.control_id == "CC6.1")
+            .expect("CC6.1 should be present");
+        assert_eq!(cc61.status, FindingStatus::Critical);
+        assert_eq!(cc61.alert_count, 5);
+        assert!(cc61.categories.contains(&"behavior:data_exfiltration".to_string()));
+
+        let cc72 = report
+            .control_findings
+            .iter()
+            .find(|f| f.control_id == "CC7.2")
+            .expect("CC7.2 should be present");
+        assert_eq!(cc72.status, FindingStatus::Critical);
+    }
+
+    #[test]
+    fn test_generate_report_with_warnings() {
+        let alerts = vec![(
+            "scan:firewall_status".to_string(),
+            "warning".to_string(),
+            3u64,
+        )];
+        let report = generate_report("soc2", 30, &alerts, &[]);
+        assert_eq!(report.total_alerts, 3);
+        assert_eq!(report.alerts_by_severity.warning, 3);
+
+        // CC6.6 should be Finding (firewall_status maps to CC6.6 in SOC2)
+        let cc66 = report
+            .control_findings
+            .iter()
+            .find(|f| f.control_id == "CC6.6")
+            .expect("CC6.6 should be present");
+        assert_eq!(cc66.status, FindingStatus::Finding);
+        assert_eq!(cc66.alert_count, 3);
+    }
+
+    #[test]
+    fn test_report_to_json() {
+        let report = generate_report("soc2", 30, &[], &[]);
+        let json = report_to_json(&report);
+
+        // Should be valid JSON
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json).expect("report_to_json should produce valid JSON");
+
+        assert_eq!(parsed["framework"], "soc2");
+        assert_eq!(parsed["period_days"], 30);
+        assert_eq!(parsed["total_alerts"], 0);
+        assert!(
+            parsed["control_findings"].is_array(),
+            "control_findings should be a JSON array"
+        );
+        assert!(
+            parsed["scanner_summary"].is_object(),
+            "scanner_summary should be a JSON object"
+        );
+    }
+
+    #[test]
+    fn test_report_to_text() {
+        let alerts = vec![(
+            "behavior:privilege_escalation".to_string(),
+            "critical".to_string(),
+            2u64,
+        )];
+        let scanners = vec![
+            ("firewall".to_string(), "pass".to_string()),
+            ("auditd".to_string(), "warn".to_string()),
+        ];
+        let report = generate_report("soc2", 30, &alerts, &scanners);
+        let text = report_to_text(&report);
+
+        assert!(
+            text.contains("SOC 2 Type II"),
+            "text output should contain framework display name"
+        );
+        assert!(
+            text.contains("30 days"),
+            "text output should contain period"
+        );
+        assert!(
+            text.contains("Control Findings"),
+            "text output should contain findings section"
+        );
+        assert!(
+            text.contains("[Critical]"),
+            "text output should show Critical status"
+        );
+        assert!(
+            text.contains("CC6.1"),
+            "text output should list affected control"
+        );
+    }
+
+    #[test]
+    fn test_finding_status_display() {
+        assert_eq!(FindingStatus::Pass.to_string(), "Pass");
+        assert_eq!(FindingStatus::Finding.to_string(), "Finding");
+        assert_eq!(FindingStatus::Critical.to_string(), "Critical");
+    }
+
+    #[test]
+    fn test_control_mapping_completeness() {
+        // Every mapping must have at least one SOC2 control
+        for mapping in CONTROL_MAPPINGS {
+            assert!(
+                !mapping.soc2_controls.is_empty(),
+                "mapping for {} should have at least one SOC2 control",
+                mapping.clawtower_category
+            );
+            assert!(
+                !mapping.nist_controls.is_empty(),
+                "mapping for {} should have at least one NIST control",
+                mapping.clawtower_category
+            );
+            assert!(
+                !mapping.cis_controls.is_empty(),
+                "mapping for {} should have at least one CIS control",
+                mapping.clawtower_category
+            );
+        }
+    }
+
+    #[test]
+    fn test_nist_framework_report() {
+        let alerts = vec![(
+            "behavior:data_exfiltration".to_string(),
+            "critical".to_string(),
+            1u64,
+        )];
+        let report = generate_report("nist-800-53", 90, &alerts, &[]);
+        assert_eq!(report.framework, "nist-800-53");
+
+        // SC-7 and SI-4 should be Critical for data exfiltration in NIST
+        let sc7 = report
+            .control_findings
+            .iter()
+            .find(|f| f.control_id == "SC-7")
+            .expect("SC-7 should be present");
+        assert_eq!(sc7.status, FindingStatus::Critical);
+    }
+
+    #[test]
+    fn test_scanner_summary() {
+        let scanners = vec![
+            ("firewall".to_string(), "pass".to_string()),
+            ("auditd".to_string(), "pass".to_string()),
+            ("suid".to_string(), "warn".to_string()),
+            ("docker".to_string(), "fail".to_string()),
+        ];
+        let report = generate_report("soc2", 30, &[], &scanners);
+        assert_eq!(report.scanner_summary.total_scans, 4);
+        assert_eq!(report.scanner_summary.pass_count, 2);
+        assert_eq!(report.scanner_summary.warn_count, 1);
+        assert_eq!(report.scanner_summary.fail_count, 1);
+    }
+
+    #[test]
+    fn test_severity_escalation() {
+        // When both warning and critical alerts hit the same control, status should be Critical
+        let alerts = vec![
+            (
+                "behavior:data_exfiltration".to_string(),
+                "warning".to_string(),
+                10u64,
+            ),
+            (
+                "behavior:data_exfiltration".to_string(),
+                "critical".to_string(),
+                1u64,
+            ),
+        ];
+        let report = generate_report("soc2", 30, &alerts, &[]);
+
+        let cc61 = report
+            .control_findings
+            .iter()
+            .find(|f| f.control_id == "CC6.1")
+            .expect("CC6.1 should be present");
+        assert_eq!(
+            cc61.status,
+            FindingStatus::Critical,
+            "critical should escalate over warning"
+        );
+        assert_eq!(cc61.alert_count, 11, "should sum both alert entries");
+    }
+}

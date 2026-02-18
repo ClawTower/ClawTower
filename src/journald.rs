@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! Journald-based log monitoring for network and SSH events.
 //!
 //! Provides two async tail functions:

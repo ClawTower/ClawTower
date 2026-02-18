@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! Periodic security posture scanner.
 //!
 //! Runs 30+ security checks on a configurable interval, producing [`ScanResult`]
@@ -2058,6 +2061,9 @@ impl SecurityScanner {
         // Shadow/quarantine directory permission verification
         results.push(scan_shadow_quarantine_permissions());
 
+        // Sudoers risk analysis
+        results.push(scan_sudoers_risk());
+
         // User persistence mechanisms
         results.extend(scan_user_persistence());
 
@@ -2851,6 +2857,146 @@ pub async fn run_persistence_scans(
         }
 
         sleep(Duration::from_secs(interval_secs)).await;
+    }
+}
+
+/// GTFOBins-capable binaries that are dangerous with NOPASSWD sudo access.
+const GTFOBINS_DANGEROUS: &[&str] = &[
+    "find", "sed", "tee", "cp", "mv", "chmod", "chown", "vim", "vi",
+    "python3", "python", "perl", "ruby", "env", "awk", "nmap", "less",
+    "more", "man", "ftp", "gdb", "git", "pip", "apt", "apt-get",
+    "docker", "tar", "zip", "rsync", "ssh", "scp", "curl", "wget",
+    "nc", "ncat", "bash", "sh", "zsh", "dash", "lua", "php", "node",
+];
+
+/// Parse sudoers content and return (critical_risks, warnings).
+fn parse_sudoers_risks(content: &str, source_path: &str) -> (Vec<String>, Vec<String>) {
+    let mut critical = Vec::new();
+    let mut warnings = Vec::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        // Check env_keep on Defaults lines before skipping them
+        if trimmed.starts_with("Defaults") {
+            if trimmed.to_lowercase().contains("env_keep") {
+                let dangerous_vars = ["LD_PRELOAD", "LD_LIBRARY_PATH", "PATH", "IFS", "PYTHONPATH"];
+                for var in &dangerous_vars {
+                    if trimmed.contains(var) {
+                        warnings.push(format!(
+                            "{}: env_keep preserves dangerous variable {}",
+                            source_path, var
+                        ));
+                    }
+                }
+            }
+            continue;
+        }
+
+        let has_nopasswd = trimmed.contains("NOPASSWD");
+        let has_all_all = trimmed.contains("ALL=(ALL)") || trimmed.contains("ALL=(ALL:ALL)");
+
+        // CRITICAL: NOPASSWD with ALL=(ALL) ALL - passwordless root
+        if has_nopasswd && has_all_all {
+            let after_colon = trimmed.rsplit(':').next().unwrap_or("");
+            if after_colon.trim() == "ALL" || after_colon.contains(" ALL") {
+                critical.push(format!(
+                    "{}: NOPASSWD ALL - passwordless unrestricted root access",
+                    source_path
+                ));
+                continue;
+            }
+        }
+
+        // CRITICAL: NOPASSWD with GTFOBins-capable binaries
+        let mut line_has_critical = false;
+        if has_nopasswd {
+            for bin in GTFOBINS_DANGEROUS {
+                let slash_bin = format!("/{}", bin);
+                if trimmed.contains(&slash_bin) {
+                    critical.push(format!(
+                        "{}: NOPASSWD on GTFOBins-capable binary '{}'",
+                        source_path, bin
+                    ));
+                    line_has_critical = true;
+                }
+            }
+        }
+
+        // WARNING: NOPASSWD with restricted scope (may be acceptable)
+        if has_nopasswd && !line_has_critical {
+            warnings.push(format!(
+                "{}: NOPASSWD with restricted scope (verify commands are safe)",
+                source_path
+            ));
+        }
+
+        // WARNING: Dangerous env_keep variables
+        if trimmed.to_lowercase().contains("env_keep") {
+            let dangerous_vars = ["LD_PRELOAD", "LD_LIBRARY_PATH", "PATH", "IFS", "PYTHONPATH"];
+            for var in &dangerous_vars {
+                if trimmed.contains(var) {
+                    warnings.push(format!(
+                        "{}: env_keep preserves dangerous variable {}",
+                        source_path, var
+                    ));
+                }
+            }
+        }
+    }
+
+    (critical, warnings)
+}
+
+pub fn scan_sudoers_risk() -> ScanResult {
+    let mut all_critical = Vec::new();
+    let mut all_warnings = Vec::new();
+
+    // Read /etc/sudoers
+    if let Ok(content) = std::fs::read_to_string("/etc/sudoers") {
+        let (c, w) = parse_sudoers_risks(&content, "/etc/sudoers");
+        all_critical.extend(c);
+        all_warnings.extend(w);
+    }
+
+    // Read /etc/sudoers.d/* drop-in files
+    if let Ok(entries) = std::fs::read_dir("/etc/sudoers.d") {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    let path_str = path.display().to_string();
+                    let (c, w) = parse_sudoers_risks(&content, &path_str);
+                    all_critical.extend(c);
+                    all_warnings.extend(w);
+                }
+            }
+        }
+    }
+
+    if !all_critical.is_empty() {
+        ScanResult::new(
+            "sudoers_risk",
+            ScanStatus::Fail,
+            &format!("{} critical sudoers risk(s): {}",
+                all_critical.len(), all_critical.join("; ")),
+        )
+    } else if !all_warnings.is_empty() {
+        ScanResult::new(
+            "sudoers_risk",
+            ScanStatus::Warn,
+            &format!("{} sudoers warning(s): {}",
+                all_warnings.len(), all_warnings.join("; ")),
+        )
+    } else {
+        ScanResult::new(
+            "sudoers_risk",
+            ScanStatus::Pass,
+            "Sudoers configuration hardened - no NOPASSWD risks found",
+        )
     }
 }
 
@@ -3853,5 +3999,44 @@ rules 0
         let result = scan_openclaw_version_freshness();
         // On test systems without openclaw, should warn gracefully
         assert!(result.category == "openclaw:version");
+    }
+
+    #[test]
+    fn test_sudoers_nopasswd_all_critical() {
+        let content = "openclaw ALL=(ALL) NOPASSWD: ALL";
+        let (critical, _) = parse_sudoers_risks(content, "/etc/sudoers");
+        assert!(!critical.is_empty());
+        assert!(critical[0].contains("passwordless unrestricted root"));
+    }
+
+    #[test]
+    fn test_sudoers_nopasswd_gtfobins_critical() {
+        let content = "openclaw ALL=(ALL) NOPASSWD: /usr/bin/find, /usr/bin/python3";
+        let (critical, _) = parse_sudoers_risks(content, "/etc/sudoers");
+        assert!(critical.iter().any(|c| c.contains("find")));
+        assert!(critical.iter().any(|c| c.contains("python3")));
+    }
+
+    #[test]
+    fn test_sudoers_nopasswd_safe_command_warning() {
+        let content = "openclaw ALL=(ALL) NOPASSWD: /usr/bin/clawtower";
+        let (critical, warnings) = parse_sudoers_risks(content, "/etc/sudoers");
+        assert!(critical.is_empty());
+        assert!(!warnings.is_empty());
+    }
+
+    #[test]
+    fn test_sudoers_env_keep_dangerous() {
+        let content = "Defaults env_keep += \"LD_PRELOAD PATH\"";
+        let (_, warnings) = parse_sudoers_risks(content, "/etc/sudoers");
+        assert!(warnings.iter().any(|w| w.contains("LD_PRELOAD")));
+    }
+
+    #[test]
+    fn test_sudoers_clean_config_passes() {
+        let content = "# This is a comment\nDefaults requiretty\n";
+        let (critical, warnings) = parse_sudoers_risks(content, "/etc/sudoers");
+        assert!(critical.is_empty());
+        assert!(warnings.is_empty());
     }
 }

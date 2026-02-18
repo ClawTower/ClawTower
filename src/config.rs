@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! Configuration loading and serialization.
 //!
 //! Defines the TOML configuration schema for ClawTower. The root [`Config`] struct
@@ -42,6 +45,8 @@ pub struct Config {
     #[serde(default)]
     pub response: ResponseConfig,
     #[serde(default)]
+    pub incident_mode: IncidentModeConfig,
+    #[serde(default)]
     pub ssh: SshConfig,
     #[serde(default)]
     pub sentinel: SentinelConfig,
@@ -51,6 +56,10 @@ pub struct Config {
     pub openclaw: OpenClawConfig,
     #[serde(default)]
     pub behavior: BehaviorConfig,
+    #[serde(default)]
+    pub export: ExportConfig,
+    #[serde(default)]
+    pub cloud: CloudConfig,
 }
 
 /// Behavior detection engine configuration.
@@ -321,6 +330,15 @@ pub struct KeyMapping {
     pub real: String,
     pub provider: String,
     pub upstream: String,
+    /// Time-to-live in seconds. None = never expires.
+    #[serde(default)]
+    pub ttl_secs: Option<u64>,
+    /// Maximum allowed API paths (e.g., ["/v1/messages"]). Empty = all paths allowed.
+    #[serde(default)]
+    pub allowed_paths: Vec<String>,
+    /// Risk score threshold — auto-revoke if agent's risk exceeds this. 0 = disabled.
+    #[serde(default)]
+    pub revoke_at_risk: f64,
 }
 
 /// Data Loss Prevention pattern configuration for the proxy.
@@ -412,6 +430,210 @@ impl Default for ResponseConfig {
     }
 }
 
+/// Incident mode configuration - deterministic containment on toggle.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct IncidentModeConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_incident_dedup")]
+    pub dedup_window_secs: u64,
+    #[serde(default = "default_incident_scan_dedup")]
+    pub scan_dedup_window_secs: u64,
+    #[serde(default = "default_incident_rate_limit")]
+    pub rate_limit_per_source: u32,
+    #[serde(default)]
+    pub lock_clawsudo: bool,
+}
+
+fn default_incident_dedup() -> u64 { 2 }
+fn default_incident_scan_dedup() -> u64 { 60 }
+fn default_incident_rate_limit() -> u32 { 200 }
+
+impl Default for IncidentModeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            dedup_window_secs: 2,
+            scan_dedup_window_secs: 60,
+            rate_limit_per_source: 200,
+            lock_clawsudo: false,
+        }
+    }
+}
+
+/// Cloud management plane uplink configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CloudConfig {
+    /// Enable cloud uplink
+    #[serde(default)]
+    pub enabled: bool,
+    /// Cloud management plane endpoint URL
+    #[serde(default = "default_cloud_endpoint")]
+    pub endpoint: String,
+    /// Path to agent Ed25519 private key for authentication
+    #[serde(default = "default_agent_key_path")]
+    pub agent_key_path: String,
+    /// Agent registration ID (auto-generated on first connect)
+    #[serde(default)]
+    pub agent_id: String,
+    /// Telemetry push interval in seconds
+    #[serde(default = "default_telemetry_interval")]
+    pub telemetry_interval: u64,
+    /// Whether to push alerts to cloud
+    #[serde(default = "default_true")]
+    pub push_alerts: bool,
+    /// Whether to pull policy updates from cloud
+    #[serde(default)]
+    pub pull_policies: bool,
+    /// Batch size for alert uploads
+    #[serde(default = "default_cloud_batch")]
+    pub batch_size: usize,
+}
+
+fn default_cloud_endpoint() -> String { "https://api.clawtower.io".to_string() }
+fn default_agent_key_path() -> String { "/etc/clawtower/agent-key.pem".to_string() }
+fn default_telemetry_interval() -> u64 { 60 }
+fn default_cloud_batch() -> usize { 50 }
+
+impl Default for CloudConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: default_cloud_endpoint(),
+            agent_key_path: default_agent_key_path(),
+            agent_id: String::new(),
+            telemetry_interval: 60,
+            push_alerts: true,
+            pull_policies: false,
+            batch_size: 50,
+        }
+    }
+}
+
+/// SIEM export pipeline configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ExportConfig {
+    /// Enable the export pipeline.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Syslog export sub-config.
+    #[serde(default)]
+    pub syslog: SyslogExportConfig,
+    /// Webhook export sub-config.
+    #[serde(default)]
+    pub webhook: WebhookExportConfig,
+    /// File export sub-config (for Splunk forwarder / Fluentd).
+    #[serde(default)]
+    pub file: FileExportConfig,
+}
+
+impl Default for ExportConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            syslog: SyslogExportConfig::default(),
+            webhook: WebhookExportConfig::default(),
+            file: FileExportConfig::default(),
+        }
+    }
+}
+
+/// Syslog (CEF / RFC 5424) export configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SyslogExportConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Target address (e.g., "udp://siem.corp:514", "tcp://siem.corp:6514")
+    #[serde(default = "default_syslog_target")]
+    pub target: String,
+    /// Format: "cef" (Common Event Format) or "rfc5424"
+    #[serde(default = "default_syslog_format")]
+    pub format: String,
+    /// Minimum severity for syslog export
+    #[serde(default = "default_syslog_min_level")]
+    pub min_level: String,
+}
+
+fn default_syslog_target() -> String { "udp://127.0.0.1:514".to_string() }
+fn default_syslog_format() -> String { "cef".to_string() }
+fn default_syslog_min_level() -> String { "warning".to_string() }
+
+impl Default for SyslogExportConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            target: default_syslog_target(),
+            format: default_syslog_format(),
+            min_level: default_syslog_min_level(),
+        }
+    }
+}
+
+/// Webhook (JSON POST) export configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WebhookExportConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Webhook URL to POST alerts to
+    #[serde(default)]
+    pub url: String,
+    /// Authorization header value (e.g., "Bearer <token>")
+    #[serde(default)]
+    pub auth_header: String,
+    /// Number of alerts to batch before flushing
+    #[serde(default = "default_webhook_batch")]
+    pub batch_size: usize,
+    /// Maximum seconds between flushes
+    #[serde(default = "default_webhook_flush")]
+    pub flush_interval_secs: u64,
+}
+
+fn default_webhook_batch() -> usize { 10 }
+fn default_webhook_flush() -> u64 { 5 }
+
+impl Default for WebhookExportConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            url: String::new(),
+            auth_header: String::new(),
+            batch_size: default_webhook_batch(),
+            flush_interval_secs: default_webhook_flush(),
+        }
+    }
+}
+
+/// File export configuration (rotated JSON lines for Splunk forwarder / Fluentd).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FileExportConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Output file path
+    #[serde(default = "default_file_export_path")]
+    pub path: String,
+    /// Maximum file size in bytes before rotation
+    #[serde(default = "default_file_max_size")]
+    pub max_size_bytes: u64,
+    /// Number of rotated files to keep
+    #[serde(default = "default_file_keep")]
+    pub keep_rotated: u32,
+}
+
+fn default_file_export_path() -> String { "/var/log/clawtower/export.jsonl".to_string() }
+fn default_file_max_size() -> u64 { 50 * 1024 * 1024 } // 50 MB
+fn default_file_keep() -> u32 { 5 }
+
+impl Default for FileExportConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            path: default_file_export_path(),
+            max_size_bytes: default_file_max_size(),
+            keep_rotated: default_file_keep(),
+        }
+    }
+}
+
 /// Real-time file sentinel configuration.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct SentinelConfig {
@@ -471,6 +693,7 @@ fn default_content_scan_excludes() -> Vec<String> {
     vec![
         "**/.openclaw/**/auth-profiles.json".to_string(),
         "**/.openclaw/credentials/**".to_string(),
+        "**/.openclaw/*.json".to_string(),
         "**/superpowers/skills/**".to_string(),
         "**/skills/*/SKILL.md".to_string(),
         "**/.openclaw/workspace/*.md".to_string(),
@@ -532,15 +755,10 @@ impl Default for SentinelConfig {
                     patterns: vec!["SKILL.md".to_string()],
                     policy: WatchPolicy::Watched,
                 },
-                // OpenClaw credential and config monitoring
+                // OpenClaw credential and config monitoring — all JSON in config root
                 WatchPathConfig {
-                    path: "/home/openclaw/.openclaw/openclaw.json".to_string(),
-                    patterns: vec!["*".to_string()],
-                    policy: WatchPolicy::Watched,
-                },
-                WatchPathConfig {
-                    path: "/home/openclaw/.openclaw/device.json".to_string(),
-                    patterns: vec!["*".to_string()],
+                    path: "/home/openclaw/.openclaw".to_string(),
+                    patterns: vec!["*.json".to_string()],
                     policy: WatchPolicy::Protected,
                 },
                 WatchPathConfig {
@@ -777,6 +995,57 @@ impl Config {
         Ok(config)
     }
 
+    /// Load config with optional profile overlay between base and config.d/.
+    /// Priority order: base < profile < config.d/ overlays.
+    pub fn load_with_profile_and_overrides(
+        base_path: &Path,
+        profile_path: Option<&Path>,
+        config_d: &Path,
+    ) -> Result<Self> {
+        let content = std::fs::read_to_string(base_path)
+            .with_context(|| format!("Failed to read config: {}", base_path.display()))?;
+        let mut base: toml::Value = toml::from_str(&content)
+            .with_context(|| "Failed to parse base config")?;
+
+        // Apply profile overlay (lower priority than config.d/)
+        if let Some(profile) = profile_path {
+            if profile.exists() {
+                let overlay_content = std::fs::read_to_string(profile)
+                    .with_context(|| format!("Failed to read profile: {}", profile.display()))?;
+                let overlay: toml::Value = toml::from_str(&overlay_content)
+                    .with_context(|| format!("Failed to parse profile: {}", profile.display()))?;
+                merge_toml(&mut base, overlay);
+            }
+        }
+
+        // Apply config.d/ overlays (highest priority — user overrides)
+        if config_d.exists() && config_d.is_dir() {
+            let mut entries: Vec<_> = std::fs::read_dir(config_d)
+                .with_context(|| format!("Failed to read config.d: {}", config_d.display()))?
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    e.path().extension()
+                        .and_then(|ext| ext.to_str())
+                        .map(|ext| ext == "toml")
+                        .unwrap_or(false)
+                })
+                .collect();
+            entries.sort_by_key(|e| e.file_name());
+
+            for entry in entries {
+                let overlay_content = std::fs::read_to_string(entry.path())
+                    .with_context(|| format!("Failed to read overlay: {}", entry.path().display()))?;
+                let overlay: toml::Value = toml::from_str(&overlay_content)
+                    .with_context(|| format!("Failed to parse overlay: {}", entry.path().display()))?;
+                merge_toml(&mut base, overlay);
+            }
+        }
+
+        let config: Config = base.try_into()
+            .with_context(|| "Failed to deserialize merged config")?;
+        Ok(config)
+    }
+
     pub fn save(&self, path: &Path) -> Result<()> {
         let content = toml::to_string_pretty(self)
             .with_context(|| "Failed to serialize config")?;
@@ -820,8 +1089,8 @@ mod tests {
             .map(|w| w.path.as_str()).collect();
         assert!(paths.iter().any(|p| p.contains(".openclaw/credentials")),
             "Should watch OpenClaw credentials dir");
-        assert!(paths.iter().any(|p| p.contains("openclaw.json")),
-            "Should watch OpenClaw config file");
+        assert!(paths.iter().any(|p| *p == "/home/openclaw/.openclaw"),
+            "Should watch OpenClaw config directory for *.json");
         assert!(paths.iter().any(|p| p.contains("auth-profiles.json")),
             "Should watch auth profiles");
     }
@@ -1342,6 +1611,50 @@ mod tests {
     }
 
     #[test]
+    fn test_incident_mode_defaults() {
+        let cfg = IncidentModeConfig::default();
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.dedup_window_secs, 2);
+        assert_eq!(cfg.scan_dedup_window_secs, 60);
+        assert_eq!(cfg.rate_limit_per_source, 200);
+        assert!(!cfg.lock_clawsudo);
+    }
+
+    #[test]
+    fn test_incident_mode_from_toml() {
+        let toml_str = r##"
+[general]
+watched_user = "1000"
+min_alert_level = "info"
+log_file = "/var/log/test.log"
+[slack]
+webhook_url = "https://hooks.slack.com/test"
+channel = "#test"
+min_slack_level = "critical"
+[auditd]
+log_path = "/var/log/audit/audit.log"
+enabled = true
+[network]
+log_path = "/var/log/syslog"
+log_prefix = "TEST"
+enabled = true
+[scans]
+interval = 60
+[incident_mode]
+enabled = true
+dedup_window_secs = 5
+lock_clawsudo = true
+"##;
+        let cfg: Config = toml::from_str(toml_str).unwrap();
+        assert!(cfg.incident_mode.enabled);
+        assert_eq!(cfg.incident_mode.dedup_window_secs, 5);
+        assert!(cfg.incident_mode.lock_clawsudo);
+        // Defaults for unspecified fields
+        assert_eq!(cfg.incident_mode.scan_dedup_window_secs, 60);
+        assert_eq!(cfg.incident_mode.rate_limit_per_source, 200);
+    }
+
+    #[test]
     fn test_load_with_overrides_no_dir() {
         let dir = tempfile::tempdir().unwrap();
         let base_path = dir.path().join("config.toml");
@@ -1373,5 +1686,112 @@ mod tests {
         let nonexistent = dir.path().join("config.d");
         let config = Config::load_with_overrides(&base_path, &nonexistent).unwrap();
         assert_eq!(config.general.watched_user, Some("1000".to_string()));
+    }
+
+    #[test]
+    fn test_load_with_profile_overlay() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_path = dir.path().join("config.toml");
+        let profile_path = dir.path().join("profile.toml");
+        let config_d = dir.path().join("config.d");
+        std::fs::create_dir(&config_d).unwrap();
+
+        std::fs::write(&base_path, r##"
+[general]
+watched_user = "1000"
+min_alert_level = "info"
+log_file = "/var/log/clawtower/watchdog.log"
+[slack]
+webhook_url = "https://hooks.slack.com/test"
+channel = "#devops"
+min_slack_level = "critical"
+[auditd]
+log_path = "/var/log/audit/audit.log"
+enabled = true
+[network]
+log_path = "/var/log/syslog"
+log_prefix = "CLAWTOWER_NET"
+enabled = true
+[scans]
+interval = 3600
+"##).unwrap();
+
+        // Profile changes scan interval and slack level
+        std::fs::write(&profile_path, r##"
+[scans]
+interval = 1800
+[slack]
+min_slack_level = "info"
+"##).unwrap();
+
+        // config.d/ override wins over profile
+        std::fs::write(config_d.join("00-override.toml"), r##"
+[scans]
+interval = 900
+"##).unwrap();
+
+        let config = Config::load_with_profile_and_overrides(
+            &base_path,
+            Some(profile_path.as_path()),
+            &config_d,
+        ).unwrap();
+
+        // config.d/ override wins: 900, not profile's 1800
+        assert_eq!(config.scans.interval, 900);
+        // Profile's slack change applies (no config.d/ override for slack)
+        assert_eq!(config.slack.min_slack_level, "info");
+        // Base value preserved where neither profile nor override touches it
+        assert_eq!(config.general.min_alert_level, "info");
+    }
+
+    #[test]
+    fn test_load_with_no_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let base_path = dir.path().join("config.toml");
+        let config_d = dir.path().join("config.d");
+        std::fs::create_dir(&config_d).unwrap();
+
+        std::fs::write(&base_path, r##"
+[general]
+watched_user = "1000"
+min_alert_level = "info"
+log_file = "/var/log/clawtower/watchdog.log"
+[slack]
+webhook_url = "https://hooks.slack.com/test"
+channel = "#devops"
+min_slack_level = "critical"
+[auditd]
+log_path = "/var/log/audit/audit.log"
+enabled = true
+[network]
+log_path = "/var/log/syslog"
+log_prefix = "CLAWTOWER_NET"
+enabled = true
+[scans]
+interval = 3600
+"##).unwrap();
+
+        // No profile, should behave like load_with_overrides
+        let config = Config::load_with_profile_and_overrides(
+            &base_path,
+            None,
+            &config_d,
+        ).unwrap();
+        assert_eq!(config.scans.interval, 3600);
+        assert_eq!(config.slack.min_slack_level, "critical");
+    }
+
+    #[test]
+    fn test_key_mapping_ttl_defaults() {
+        let toml_str = r#"
+            virtual_key = "vk-test"
+            real = "sk-real"
+            provider = "anthropic"
+            upstream = "https://api.anthropic.com"
+        "#;
+        let mapping: KeyMapping = toml::from_str(toml_str).unwrap();
+        assert!(mapping.ttl_secs.is_none(), "ttl_secs should default to None");
+        assert!(mapping.allowed_paths.is_empty(), "allowed_paths should default to empty");
+        assert_eq!(mapping.revoke_at_risk, 0.0, "revoke_at_risk should default to 0.0");
     }
 }

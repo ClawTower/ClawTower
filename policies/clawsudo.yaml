@@ -115,6 +115,49 @@ rules:
     action: critical
     enforcement: deny
 
+  # ── Enterprise: Deny dangerous file operations via sudo ──────────────────
+  - name: "deny-find-exec"
+    description: "find with -exec can run arbitrary commands as root"
+    match:
+      command_contains: ["find "]
+    action: critical
+    enforcement: deny
+
+  - name: "deny-sed-write-sensitive"
+    description: "sed -i to sensitive paths enables config tampering"
+    match:
+      command_contains: ["sed -i /etc/", "sed -i /var/", "sed -e", "sed -i s/", "sed -i 's/"]
+    action: critical
+    enforcement: deny
+
+  - name: "deny-tee-sensitive"
+    description: "tee to /etc enables arbitrary file writes as root"
+    match:
+      command_contains: ["tee /etc/", "tee /var/log/", "tee /root/"]
+    action: critical
+    enforcement: deny
+
+  - name: "deny-chmod-suid"
+    description: "chmod +s creates SUID binaries for priv escalation"
+    match:
+      command_contains: ["chmod +s", "chmod u+s", "chmod 4"]
+    action: critical
+    enforcement: deny
+
+  - name: "deny-sudoers-write"
+    description: "Writing to sudoers grants permanent root access"
+    match:
+      command_contains: ["sudoers", "visudo"]
+    action: critical
+    enforcement: deny
+
+  - name: "deny-chattr-non-clawtower"
+    description: "chattr on non-ClawTower files could remove protections"
+    match:
+      command_contains: ["chattr -i", "chattr +i"]
+    action: critical
+    enforcement: deny
+
   # ── Allowed Commands (checked AFTER denies) ────────────────────────────────
   - name: "allow-apt"
     match:
@@ -128,10 +171,15 @@ rules:
     action: info
     enforcement: allow
 
-  - name: "allow-systemctl"
-    description: "Allow service management"
+  - name: "allow-systemctl-readonly"
+    description: "Only allow status/query operations via systemctl"
     match:
-      command: ["systemctl"]
+      command_contains:
+        - "systemctl status"
+        - "systemctl is-active"
+        - "systemctl is-enabled"
+        - "systemctl list-units"
+        - "systemctl show"
     action: info
     enforcement: allow
 

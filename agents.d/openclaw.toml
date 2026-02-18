@@ -1,0 +1,121 @@
+# ClawTower Agent Profile: OpenClaw
+#
+# Monitoring profile for the OpenClaw AI agent. Matches the hardcoded
+# sentinel defaults that were previously in SentinelConfig::default().
+
+[agent]
+name = "OpenClaw"
+user = "openclaw"
+home_dir = "/home/openclaw"
+workspace_dir = "/home/openclaw/.openclaw/workspace"
+
+# ── Cognitive identity files ─────────────────────────────────────────
+[identity_files]
+protected = [
+    "{workspace}/SOUL.md",
+    "{workspace}/AGENTS.md",
+    "{workspace}/MEMORY.md",
+    "{workspace}/IDENTITY.md",
+    "{workspace}/USER.md",
+]
+watched = [
+    "{workspace}/HEARTBEAT.md",
+    "{workspace}/TOOLS.md",
+]
+
+# ── Sensitive paths (credentials, configs, sessions) ─────────────────
+[[sensitive_paths.protected]]
+path = "{home}/.openclaw"
+patterns = ["*.json"]
+
+[[sensitive_paths.protected]]
+path = "{home}/.openclaw/credentials"
+patterns = ["*.json"]
+
+[[sensitive_paths.protected]]
+path = "{home}/.openclaw/credentials/whatsapp"
+patterns = ["creds.json"]
+
+[[sensitive_paths.watched]]
+path = "{home}/.openclaw/agents/main/agent/auth-profiles.json"
+patterns = ["*"]
+
+[[sensitive_paths.watched]]
+path = "{home}/.openclaw/agents/main/sessions/sessions.json"
+patterns = ["*"]
+
+[[sensitive_paths.watched]]
+path = "{home}/.openclaw/credentials"
+patterns = ["*-allowFrom.json"]
+
+[[sensitive_paths.watched]]
+path = "{home}/.openclaw/mcp-servers"
+patterns = ["*"]
+
+[[sensitive_paths.watched]]
+path = "{home}/.mcp"
+patterns = ["*.json", "*.yaml"]
+
+[[sensitive_paths.watched]]
+path = "{home}/Downloads"
+patterns = ["*.md", "*.txt", "*.json", "*.html"]
+
+[[sensitive_paths.watched]]
+path = "{workspace}/memory"
+patterns = ["*.md"]
+
+# ── Skill/plugin paths ──────────────────────────────────────────────
+[[skill_paths.watch]]
+path = "{workspace}/superpowers/skills"
+patterns = ["SKILL.md"]
+
+# ── Persistence mechanism paths ──────────────────────────────────────
+[persistence_paths]
+shell_files = [
+    "{home}/.bashrc",
+    "{home}/.profile",
+    "{home}/.bash_login",
+    "{home}/.bash_logout",
+    "{home}/.npmrc",
+    "{home}/.ssh/rc",
+    "{home}/.ssh/environment",
+]
+
+[[persistence_paths.directories]]
+path = "{home}/.config/systemd/user"
+patterns = ["*.service", "*.timer"]
+
+[[persistence_paths.directories]]
+path = "{home}/.config/autostart"
+patterns = ["*.desktop"]
+
+[[persistence_paths.directories]]
+path = "{workspace}/.git/hooks"
+patterns = ["*"]
+
+[[persistence_paths.directories]]
+path = "/var/spool/cron/crontabs"
+patterns = ["*"]
+
+[[persistence_paths.directories]]
+path = "/var/spool/at"
+patterns = ["*"]
+
+[[persistence_paths.directories]]
+path = "/usr/lib/python3/dist-packages"
+patterns = ["sitecustomize.py", "usercustomize.py"]
+
+[[persistence_paths.directories]]
+path = "/usr/local/lib/python3.11/dist-packages"
+patterns = ["sitecustomize.py", "usercustomize.py"]
+
+[[persistence_paths.directories]]
+path = "{home}/.node_modules"
+patterns = [".package-lock.json"]
+
+# ── Network expectations ─────────────────────────────────────────────
+[network]
+expected_hosts = [
+    "api.anthropic.com",
+    "gateway.openclaw.io",
+]

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! Core alert types shared across all ClawTower modules.
 //!
 //! Every monitoring subsystem produces [`Alert`] values with a [`Severity`] level,
@@ -63,6 +66,12 @@ pub struct Alert {
     pub source: String,
     /// Human-readable description of what happened
     pub message: String,
+    /// Name of the AI agent that triggered this alert (if known)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
+    /// Name of the skill/tool that triggered this alert (if known)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_name: Option<String>,
 }
 
 impl Alert {
@@ -73,7 +82,21 @@ impl Alert {
             severity,
             source: source.to_string(),
             message: message.to_string(),
+            agent_name: None,
+            skill_name: None,
         }
+    }
+
+    /// Attach an agent name to this alert.
+    pub fn with_agent(mut self, agent: &str) -> Self {
+        self.agent_name = Some(agent.to_string());
+        self
+    }
+
+    /// Attach a skill name to this alert.
+    pub fn with_skill(mut self, skill: &str) -> Self {
+        self.skill_name = Some(skill.to_string());
+        self
     }
 }
 
@@ -86,7 +109,14 @@ impl fmt::Display for Alert {
             self.severity,
             self.source,
             self.message
-        )
+        )?;
+        if let Some(ref agent) = self.agent_name {
+            write!(f, " (agent: {})", agent)?;
+        }
+        if let Some(ref skill) = self.skill_name {
+            write!(f, " (skill: {})", skill)?;
+        }
+        Ok(())
     }
 }
 
@@ -129,5 +159,62 @@ impl AlertStore {
     #[allow(dead_code)]
     pub fn count_by_source(&self, source: &str) -> usize {
         self.alerts.iter().filter(|a| a.source == source).count()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_alert_new_no_attribution() {
+        let alert = Alert::new(Severity::Info, "test", "hello");
+        assert!(alert.agent_name.is_none());
+        assert!(alert.skill_name.is_none());
+    }
+
+    #[test]
+    fn test_alert_with_agent() {
+        let alert = Alert::new(Severity::Warning, "behavior", "exfil detected")
+            .with_agent("openclaw");
+        assert_eq!(alert.agent_name, Some("openclaw".to_string()));
+        assert!(alert.skill_name.is_none());
+    }
+
+    #[test]
+    fn test_alert_with_skill() {
+        let alert = Alert::new(Severity::Info, "proxy", "request blocked")
+            .with_skill("web-search");
+        assert!(alert.agent_name.is_none());
+        assert_eq!(alert.skill_name, Some("web-search".to_string()));
+    }
+
+    #[test]
+    fn test_alert_with_both() {
+        let alert = Alert::new(Severity::Critical, "behavior", "lateral movement")
+            .with_agent("openclaw")
+            .with_skill("shell-exec");
+        assert_eq!(alert.agent_name, Some("openclaw".to_string()));
+        assert_eq!(alert.skill_name, Some("shell-exec".to_string()));
+    }
+
+    #[test]
+    fn test_alert_display_no_attribution() {
+        let alert = Alert::new(Severity::Info, "test", "no agent");
+        let output = format!("{}", alert);
+        assert!(!output.contains("(agent:"));
+        assert!(!output.contains("(skill:"));
+        assert!(output.contains("[test]"));
+        assert!(output.contains("no agent"));
+    }
+
+    #[test]
+    fn test_alert_display_with_attribution() {
+        let alert = Alert::new(Severity::Warning, "behavior", "suspicious")
+            .with_agent("openclaw")
+            .with_skill("web-search");
+        let output = format!("{}", alert);
+        assert!(output.contains("(agent: openclaw)"));
+        assert!(output.contains("(skill: web-search)"));
     }
 }

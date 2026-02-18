@@ -1,0 +1,30 @@
+# ClawTower Profile: production
+#
+# Balanced production defaults — all sources active, standard scan cadence,
+# Slack forwarding at Warning+. Suitable for most deployments.
+# Use: clawtower run --profile=production
+
+[general]
+min_alert_level = "info"
+
+[scans]
+interval = 3600
+persistence_interval = 300
+
+[slack]
+min_slack_level = "warning"
+heartbeat_interval = 3600
+
+[auto_update]
+enabled = true
+interval = 300
+mode = "auto"
+
+[sentinel]
+enabled = true
+
+[ssh]
+enabled = true
+
+[policy]
+enabled = true

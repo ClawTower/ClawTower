@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! Tamper-evident hash-chained audit log.
 //!
 //! Every alert that passes through the aggregator is appended to a JSONL file

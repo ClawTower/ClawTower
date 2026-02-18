@@ -1,0 +1,22 @@
+# ClawTower Profile: startup
+#
+# Developer-friendly defaults for initial setup and testing.
+# Relaxed alerting, longer scan intervals, auto-update enabled.
+# Use: clawtower run --profile=startup
+
+[general]
+min_alert_level = "warning"
+
+[scans]
+interval = 7200
+
+[slack]
+min_slack_level = "critical"
+
+[auto_update]
+enabled = true
+interval = 600
+mode = "notify"
+
+[incident_mode]
+enabled = false

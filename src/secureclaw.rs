@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! SecureClaw vendor threat pattern engine.
 //!
 //! Loads and compiles regex pattern databases from JSON files in a vendor directory:
@@ -10,8 +13,10 @@
 //! positives on legitimate system administration commands.
 
 use anyhow::{Context, Result};
+use ed25519_dalek::{Verifier, VerifyingKey, Signature};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
 
@@ -21,10 +26,16 @@ pub struct SecureClawConfig {
     pub enabled: bool,
     #[serde(default = "default_vendor_dir")]
     pub vendor_dir: String,
+    #[serde(default = "default_ioc_pubkey_path")]
+    pub ioc_pubkey_path: String,
 }
 
 fn default_vendor_dir() -> String {
     "./vendor/secureclaw/secureclaw/skill/configs".to_string()
+}
+
+fn default_ioc_pubkey_path() -> String {
+    "/etc/clawtower/ioc-signing-key.pub".to_string()
 }
 
 impl Default for SecureClawConfig {
@@ -32,6 +43,7 @@ impl Default for SecureClawConfig {
         Self {
             enabled: false,
             vendor_dir: default_vendor_dir(),
+            ioc_pubkey_path: default_ioc_pubkey_path(),
         }
     }
 }
@@ -66,6 +78,8 @@ pub struct PatternMatch {
     pub severity: String,
     pub action: String,
     pub matched_text: String,
+    /// Version of the IOC database that produced this match (set when using versioned bundles).
+    pub db_version: Option<String>,
 }
 
 // Deserialization structs for JSON files
@@ -343,6 +357,7 @@ impl SecureClawEngine {
                     severity: pattern.severity.clone(),
                     action: pattern.action.clone(),
                     matched_text: matched.as_str().to_string(),
+                    db_version: None,
                 });
             }
         }
@@ -357,6 +372,7 @@ impl SecureClawEngine {
                     severity: pattern.severity.clone(),
                     action: pattern.action.clone(),
                     matched_text: matched.as_str().to_string(),
+                    db_version: None,
                 });
             }
         }
@@ -371,6 +387,7 @@ impl SecureClawEngine {
                     severity: pattern.severity.clone(),
                     action: pattern.action.clone(),
                     matched_text: matched.as_str().to_string(),
+                    db_version: None,
                 });
             }
         }
@@ -385,6 +402,7 @@ impl SecureClawEngine {
                     severity: pattern.severity.clone(),
                     action: pattern.action.clone(),
                     matched_text: matched.as_str().to_string(),
+                    db_version: None,
                 });
             }
         }
@@ -626,6 +644,7 @@ impl SecureClawEngine {
                     severity: pattern.severity.clone(),
                     action: pattern.action.clone(),
                     matched_text: matched.as_str().to_string(),
+                    db_version: None,
                 });
             }
         }
@@ -647,11 +666,174 @@ impl SecureClawEngine {
                     severity: pattern.severity.clone(),
                     action: pattern.action.clone(),
                     matched_text: matched.as_str().to_string(),
+                    db_version: None,
                 });
             }
         }
 
         matches
+    }
+}
+
+/// Metadata about an IOC bundle after verification.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct IocBundleMetadata {
+    pub path: String,
+    pub version: String,
+    pub verified: bool,
+    pub signature_present: bool,
+}
+
+/// Ed25519 signature verifier for IOC JSON pattern databases.
+///
+/// Each JSON database can have a corresponding `.sig` file containing a 64-byte
+/// Ed25519 signature over the SHA-256 digest of the JSON content. The verifier
+/// checks this signature against a configurable public key.
+#[allow(dead_code)]
+pub struct IocBundleVerifier {
+    pubkey: VerifyingKey,
+}
+
+#[allow(dead_code)]
+impl IocBundleVerifier {
+    /// Create a new verifier from raw 32-byte Ed25519 public key bytes.
+    pub fn from_bytes(key_bytes: &[u8; 32]) -> Result<Self> {
+        let pubkey = VerifyingKey::from_bytes(key_bytes)
+            .context("Invalid Ed25519 public key bytes")?;
+        Ok(Self { pubkey })
+    }
+
+    /// Create a new verifier by reading a 32-byte public key from a file.
+    pub fn from_file(path: &Path) -> Result<Self> {
+        let key_bytes = fs::read(path)
+            .with_context(|| format!("Failed to read IOC signing key: {}", path.display()))?;
+        if key_bytes.len() != 32 {
+            anyhow::bail!(
+                "IOC signing key must be 32 bytes, got {} bytes from {}",
+                key_bytes.len(),
+                path.display()
+            );
+        }
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&key_bytes);
+        Self::from_bytes(&arr)
+    }
+
+    /// Verify an IOC bundle JSON file against its `.sig` sidecar.
+    ///
+    /// Reads the JSON content, looks for `<path>.sig`, and if present, verifies
+    /// the Ed25519 signature over the SHA-256 digest of the JSON bytes.
+    /// Returns metadata including verification status.
+    pub fn verify_bundle(&self, json_path: &Path) -> Result<IocBundleMetadata> {
+        let json_content = fs::read(json_path)
+            .with_context(|| format!("Failed to read IOC bundle: {}", json_path.display()))?;
+
+        // Extract version from JSON if present (best-effort)
+        let version = Self::extract_version(&json_content);
+
+        // Look for the .sig sidecar file
+        let sig_path = json_path.with_extension(
+            format!(
+                "{}.sig",
+                json_path.extension().unwrap_or_default().to_string_lossy()
+            ),
+        );
+
+        if !sig_path.exists() {
+            return Ok(IocBundleMetadata {
+                path: json_path.display().to_string(),
+                version,
+                verified: false,
+                signature_present: false,
+            });
+        }
+
+        let sig_bytes = fs::read(&sig_path)
+            .with_context(|| format!("Failed to read signature file: {}", sig_path.display()))?;
+
+        if sig_bytes.len() != 64 {
+            anyhow::bail!(
+                "Invalid signature length in {}: {} (expected 64)",
+                sig_path.display(),
+                sig_bytes.len()
+            );
+        }
+
+        // Compute SHA-256 of the JSON content
+        let mut hasher = Sha256::new();
+        hasher.update(&json_content);
+        let digest = hasher.finalize();
+
+        // Verify Ed25519 signature over the digest
+        let signature = Signature::from_slice(&sig_bytes)
+            .context("Invalid Ed25519 signature format")?;
+
+        let verified = self.pubkey.verify(&digest, &signature).is_ok();
+
+        Ok(IocBundleMetadata {
+            path: json_path.display().to_string(),
+            version,
+            verified,
+            signature_present: true,
+        })
+    }
+
+    /// Verify an IOC bundle, returning unverified metadata on any error.
+    ///
+    /// This is the safe entry point: it logs warnings but never fails. Use this
+    /// when loading databases at startup so that a missing or bad signature does
+    /// not prevent the engine from operating.
+    pub fn verify_or_warn(&self, json_path: &Path) -> IocBundleMetadata {
+        match self.verify_bundle(json_path) {
+            Ok(meta) => {
+                if meta.signature_present && !meta.verified {
+                    tracing::warn!(
+                        "IOC bundle signature INVALID: {} (version {})",
+                        json_path.display(),
+                        meta.version
+                    );
+                } else if !meta.signature_present {
+                    tracing::warn!(
+                        "IOC bundle has no signature: {} (version {})",
+                        json_path.display(),
+                        meta.version
+                    );
+                } else {
+                    tracing::info!(
+                        "IOC bundle verified: {} (version {})",
+                        json_path.display(),
+                        meta.version
+                    );
+                }
+                meta
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "IOC bundle verification failed for {}: {}",
+                    json_path.display(),
+                    e
+                );
+                IocBundleMetadata {
+                    path: json_path.display().to_string(),
+                    version: "unknown".to_string(),
+                    verified: false,
+                    signature_present: false,
+                }
+            }
+        }
+    }
+
+    /// Best-effort extraction of a "version" field from JSON bytes.
+    fn extract_version(json_bytes: &[u8]) -> String {
+        if let Ok(text) = std::str::from_utf8(json_bytes) {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(text) {
+                if let Some(v) = val.get("version").and_then(|v| v.as_str()) {
+                    return v.to_string();
+                }
+            }
+        }
+        "unknown".to_string()
     }
 }
 
@@ -1052,5 +1234,158 @@ mod tests {
         write_empty_files(&d);
         let e = SecureClawEngine::load(d.path()).unwrap();
         assert!(e.check_command("crontab -l").is_empty());
+    }
+
+    // ---- IOC Bundle Verifier Tests ----
+
+    #[test]
+    fn test_ioc_bundle_metadata_default() {
+        let meta = IocBundleMetadata {
+            path: "/tmp/test.json".to_string(),
+            version: "unknown".to_string(),
+            verified: false,
+            signature_present: false,
+        };
+        assert_eq!(meta.path, "/tmp/test.json");
+        assert_eq!(meta.version, "unknown");
+        assert!(!meta.verified);
+        assert!(!meta.signature_present);
+    }
+
+    #[test]
+    fn test_pattern_match_with_version() {
+        let m = PatternMatch {
+            database: "supply_chain_iocs".to_string(),
+            category: "suspicious_skill".to_string(),
+            pattern_name: "test_pattern".to_string(),
+            severity: "critical".to_string(),
+            action: "BLOCK".to_string(),
+            matched_text: "matched".to_string(),
+            db_version: Some("2.1.0".to_string()),
+        };
+        assert_eq!(m.db_version, Some("2.1.0".to_string()));
+
+        let m2 = PatternMatch {
+            database: "injection_patterns".to_string(),
+            category: "sql".to_string(),
+            pattern_name: "test".to_string(),
+            severity: "high".to_string(),
+            action: "WARN".to_string(),
+            matched_text: "select".to_string(),
+            db_version: None,
+        };
+        assert_eq!(m2.db_version, None);
+    }
+
+    #[test]
+    fn test_verify_bundle_no_sig_file() {
+        use ed25519_dalek::SigningKey;
+
+        let d = TempDir::new().unwrap();
+        let json_path = d.path().join("test-patterns.json");
+        fs::write(&json_path, r#"{"version":"1.0.0","patterns":{}}"#).unwrap();
+
+        // Fixed test keypair (deterministic, no rand_core feature needed)
+        let secret: [u8; 32] = [1u8; 32];
+        let signing_key = SigningKey::from_bytes(&secret);
+        let verifying_key = signing_key.verifying_key();
+
+        let verifier = IocBundleVerifier::from_bytes(verifying_key.as_bytes()).unwrap();
+        let meta = verifier.verify_bundle(&json_path).unwrap();
+
+        assert_eq!(meta.version, "1.0.0");
+        assert!(!meta.verified);
+        assert!(!meta.signature_present);
+    }
+
+    #[test]
+    fn test_verify_bundle_invalid_sig() {
+        use ed25519_dalek::{Signer, SigningKey};
+        use sha2::Digest as _;
+
+        let d = TempDir::new().unwrap();
+        let json_path = d.path().join("test-patterns.json");
+        let json_content = r#"{"version":"2.0.0","patterns":{"cat":["meow"]}}"#;
+        fs::write(&json_path, json_content).unwrap();
+
+        // Fixed test keypair (deterministic, no rand_core feature needed)
+        let secret: [u8; 32] = [2u8; 32];
+        let signing_key = SigningKey::from_bytes(&secret);
+        let verifying_key = signing_key.verifying_key();
+
+        // Sign DIFFERENT content (not the actual JSON content) to produce an invalid signature
+        let wrong_content = b"this is not the json content";
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(wrong_content);
+        let wrong_digest = hasher.finalize();
+        let bad_sig = signing_key.sign(&wrong_digest);
+
+        // Write the bad signature to the .sig sidecar
+        let sig_path = d.path().join("test-patterns.json.sig");
+        fs::write(&sig_path, bad_sig.to_bytes()).unwrap();
+
+        let verifier = IocBundleVerifier::from_bytes(verifying_key.as_bytes()).unwrap();
+        let meta = verifier.verify_bundle(&json_path).unwrap();
+
+        assert_eq!(meta.version, "2.0.0");
+        assert!(meta.signature_present);
+        assert!(!meta.verified, "Signature over wrong content should not verify");
+    }
+
+    #[test]
+    fn test_verify_bundle_valid_sig() {
+        use ed25519_dalek::{Signer, SigningKey};
+        use sha2::Digest as _;
+
+        let d = TempDir::new().unwrap();
+        let json_path = d.path().join("test-patterns.json");
+        let json_content = r#"{"version":"3.0.0","patterns":{"test":["hello"]}}"#;
+        fs::write(&json_path, json_content).unwrap();
+
+        // Fixed test keypair (deterministic, no rand_core feature needed)
+        let secret: [u8; 32] = [3u8; 32];
+        let signing_key = SigningKey::from_bytes(&secret);
+        let verifying_key = signing_key.verifying_key();
+
+        // Sign the correct SHA-256 digest of the JSON content
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(json_content.as_bytes());
+        let digest = hasher.finalize();
+        let good_sig = signing_key.sign(&digest);
+
+        // Write the valid signature to the .sig sidecar
+        let sig_path = d.path().join("test-patterns.json.sig");
+        fs::write(&sig_path, good_sig.to_bytes()).unwrap();
+
+        let verifier = IocBundleVerifier::from_bytes(verifying_key.as_bytes()).unwrap();
+        let meta = verifier.verify_bundle(&json_path).unwrap();
+
+        assert_eq!(meta.version, "3.0.0");
+        assert!(meta.signature_present);
+        assert!(meta.verified, "Valid signature should verify");
+    }
+
+    #[test]
+    fn test_verify_or_warn_returns_unverified_on_error() {
+        use ed25519_dalek::SigningKey;
+
+        // Fixed test keypair (deterministic, no rand_core feature needed)
+        let secret: [u8; 32] = [4u8; 32];
+        let signing_key = SigningKey::from_bytes(&secret);
+        let verifying_key = signing_key.verifying_key();
+
+        let verifier = IocBundleVerifier::from_bytes(verifying_key.as_bytes()).unwrap();
+
+        // Point at a nonexistent file -- verify_or_warn should NOT panic
+        let meta = verifier.verify_or_warn(Path::new("/nonexistent/ioc.json"));
+        assert!(!meta.verified);
+        assert!(!meta.signature_present);
+        assert_eq!(meta.version, "unknown");
+    }
+
+    #[test]
+    fn test_secureclaw_config_ioc_pubkey_default() {
+        let config = SecureClawConfig::default();
+        assert_eq!(config.ioc_pubkey_path, "/etc/clawtower/ioc-signing-key.pub");
     }
 }

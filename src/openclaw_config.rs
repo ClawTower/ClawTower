@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! OpenClaw configuration drift detection.
 //!
 //! Parses `openclaw.json`, extracts security-critical fields, and compares

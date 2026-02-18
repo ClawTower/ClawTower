@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! clawsudo — sudo proxy/gatekeeper for ClawTower
 //!
 //! Every privileged command goes through policy evaluation before execution.
@@ -661,10 +664,15 @@ mod tests {
     }
 
     #[test]
-    fn test_systemctl_openclaw_allowed() {
+    fn test_systemctl_restart_enterprise_not_allowed() {
         let rules = load_test_rules();
-        let result = evaluate(&rules, "systemctl", "systemctl restart openclaw").unwrap();
-        assert_eq!(result.enforcement, Enforcement::Allow);
+        // Enterprise policy: systemctl restart is NOT in the readonly allowlist
+        let result = evaluate(&rules, "systemctl", "systemctl restart openclaw");
+        // Should not match any allow rule; fail-secure means ask/deny
+        if let Some(r) = result {
+            assert_ne!(r.enforcement, Enforcement::Allow);
+        }
+        // None is also acceptable: fail-secure means deny
     }
 
     #[test]
@@ -949,5 +957,60 @@ mod tests {
         assert!(create_approval_file(path_str).is_ok());
         // Second create should fail (O_EXCL)
         assert!(create_approval_file(path_str).is_err(), "Double-create should fail with O_EXCL");
+    }
+
+    // ── Enterprise hardening policy tests ──
+
+    #[test]
+    fn test_enterprise_deny_find() {
+        let rules = load_test_rules();
+        let r = evaluate(&rules, "find", "find /etc -name foo").unwrap();
+        assert_eq!(r.enforcement, Enforcement::Deny);
+        assert_eq!(r.rule_name, "deny-find-exec");
+    }
+
+    #[test]
+    fn test_enterprise_deny_sed_write() {
+        let rules = load_test_rules();
+        let r = evaluate(&rules, "sed", "sed -i s/old/new/ /etc/passwd").unwrap();
+        assert_eq!(r.enforcement, Enforcement::Deny);
+    }
+
+    #[test]
+    fn test_enterprise_deny_tee() {
+        let rules = load_test_rules();
+        let r = evaluate(&rules, "tee", "tee /etc/cron.d/backdoor").unwrap();
+        assert_eq!(r.enforcement, Enforcement::Deny);
+    }
+
+    #[test]
+    fn test_enterprise_deny_chmod_suid() {
+        let rules = load_test_rules();
+        let r = evaluate(&rules, "chmod", "chmod +s /tmp/escalate").unwrap();
+        assert_eq!(r.enforcement, Enforcement::Deny);
+    }
+
+    #[test]
+    fn test_enterprise_deny_sudoers() {
+        let rules = load_test_rules();
+        let r = evaluate(&rules, "visudo", "visudo").unwrap();
+        assert_eq!(r.enforcement, Enforcement::Deny);
+    }
+
+    #[test]
+    fn test_enterprise_systemctl_status_ok() {
+        let rules = load_test_rules();
+        let r = evaluate(&rules, "systemctl", "systemctl status nginx").unwrap();
+        assert_eq!(r.enforcement, Enforcement::Allow);
+    }
+
+    #[test]
+    fn test_enterprise_systemctl_restart_blocked() {
+        let rules = load_test_rules();
+        let result = evaluate(&rules, "systemctl", "systemctl restart nginx");
+        // No allow rule matches; fail-secure means ask/deny
+        if let Some(r) = result {
+            assert_ne!(r.enforcement, Enforcement::Allow);
+        }
     }
 }

@@ -149,6 +149,8 @@ cargo test test_name          # Specific test
 
 Tests are inline `#[cfg(test)] mod tests` in each module. Dev dependency: `tempfile = "3"`.
 
+**PATH note:** If `cargo` is not found, source the Rust environment first: `export PATH="$HOME/.cargo/bin:$PATH"` (or `source "$HOME/.cargo/env"`).
+
 ---
 
 ## Build & Deploy

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! Falco eBPF/syscall alert integration.
 //!
 //! Tails a Falco JSON log file and converts entries into ClawTower alerts.

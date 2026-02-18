@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! Samhain file integrity monitoring integration.
 //!
 //! Tails the Samhain log file and converts entries into ClawTower alerts.

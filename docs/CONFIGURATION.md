@@ -306,10 +306,14 @@ Periodic security scanner configuration. This section **must** be present in the
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `interval` | `u64` | *(required)* | Seconds between scan cycles |
+| `persistence_interval` | `u64` | `300` | Seconds between persistence-focused scan cycles |
+| `dedup_interval_secs` | `u64` | `3600` | Seconds before repeating unchanged scanner findings |
 
 ```toml
 [scans]
 interval = 300
+persistence_interval = 300
+dedup_interval_secs = 3600
 ```
 
 ---
@@ -509,7 +513,12 @@ Real-time file integrity monitoring via inotify.
 **Default watch paths:**
 1. `SOUL.md` → protected
 2. `AGENTS.md` → protected
-3. `MEMORY.md` → watched
+3. `MEMORY.md` → protected
+
+Additional defaults include identity/control files (e.g. `IDENTITY.md`, `USER.md`),
+watch-only files (e.g. `HEARTBEAT.md`, `TOOLS.md`), OpenClaw credentials/config
+paths, persistence-sensitive shell/profile files, and selected system/user startup
+locations.
 
 ```toml
 [sentinel]
@@ -532,6 +541,11 @@ policy = "protected"
 
 [[sentinel.watch_paths]]
 path = "/home/openclaw/.openclaw/workspace/MEMORY.md"
+patterns = ["*"]
+policy = "protected"
+
+[[sentinel.watch_paths]]
+path = "/home/openclaw/.openclaw/workspace/HEARTBEAT.md"
 patterns = ["*"]
 policy = "watched"
 ```
@@ -655,6 +669,10 @@ auth_token = ""
 [scans]
 # Seconds between periodic security scan cycles (30+ checks)
 interval = 300
+# Seconds between persistence-focused scans
+persistence_interval = 300
+# Repeat unchanged scanner findings at most once per this interval
+dedup_interval_secs = 3600
 
 [proxy]
 # API key vault proxy with DLP scanning
@@ -728,6 +746,12 @@ policy = "protected"
 # "watched" = update shadow, track diffs → Info alert
 [[sentinel.watch_paths]]
 path = "/home/openclaw/.openclaw/workspace/MEMORY.md"
+patterns = ["*"]
+policy = "protected"
+
+# Example of a watched file (changes tracked, not auto-restored)
+[[sentinel.watch_paths]]
+path = "/home/openclaw/.openclaw/workspace/HEARTBEAT.md"
 patterns = ["*"]
 policy = "watched"
 

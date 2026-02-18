@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! Network policy enforcement engine.
 //!
 //! Evaluates outbound connections against an allowlist or blocklist of hosts/ports.

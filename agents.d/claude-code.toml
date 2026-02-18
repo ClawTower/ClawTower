@@ -1,0 +1,55 @@
+# ClawTower Agent Profile: Claude Code
+#
+# Monitoring profile for Anthropic's Claude Code CLI agent.
+# Covers the .claude/ configuration directory and project workspaces.
+
+[agent]
+name = "Claude Code"
+user = "developer"
+home_dir = "/home/developer"
+workspace_dir = "/home/developer/workspace"
+
+# ── Identity / config files ──────────────────────────────────────────
+[identity_files]
+protected = [
+    "{home}/.claude/CLAUDE.md",
+]
+watched = [
+    "{home}/.claude/settings.json",
+    "{home}/.claude/keybindings.json",
+]
+
+# ── Sensitive paths ──────────────────────────────────────────────────
+[[sensitive_paths.protected]]
+path = "{home}/.claude"
+patterns = ["credentials.json", "*.key"]
+
+[[sensitive_paths.watched]]
+path = "{home}/.claude/projects"
+patterns = ["*.md"]
+
+[[sensitive_paths.watched]]
+path = "{home}/.claude/plugins"
+patterns = ["plugin.json"]
+
+# ── Persistence paths ────────────────────────────────────────────────
+[persistence_paths]
+shell_files = [
+    "{home}/.bashrc",
+    "{home}/.profile",
+    "{home}/.zshrc",
+]
+
+[[persistence_paths.directories]]
+path = "{home}/.config/systemd/user"
+patterns = ["*.service", "*.timer"]
+
+[[persistence_paths.directories]]
+path = "/var/spool/cron/crontabs"
+patterns = ["*"]
+
+# ── Network expectations ─────────────────────────────────────────────
+[network]
+expected_hosts = [
+    "api.anthropic.com",
+]

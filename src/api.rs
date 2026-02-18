@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! HTTP REST API server for external integrations.
 //!
 //! Exposes endpoints on a configurable bind address (default port 18791):

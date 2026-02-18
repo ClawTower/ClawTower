@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! AppArmor profile management with pam_cap fallback.
 //!
 //! Embeds both AppArmor profiles at compile time so they're available even when
@@ -291,47 +294,23 @@ fn setup_pam_cap_fallback(result: &mut SetupResult, quiet: bool) {
         }
     }
 
-    // Ensure pam_cap.so is in the PAM login stack
+    // NOTE: pam_cap was previously added to /etc/pam.d/common-auth here,
+    // but it caused CAP_LINUX_IMMUTABLE to be dropped from ALL user sessions
+    // (not just openclaw), making re-harden and chattr operations impossible.
+    // Removed. Defense layers that remain: AppArmor deny capability, clawsudo
+    // deny rules, chattr +i on files, kernel.modules_disabled=1.
+    //
+    // Clean up stale pam_cap entry from previous installs:
     let pam_auth = Path::new("/etc/pam.d/common-auth");
-    let pam_cap_line = "auth    optional    pam_cap.so";
-
-    let already_configured = fs::read_to_string(pam_auth)
-        .map(|contents| contents.contains("pam_cap"))
-        .unwrap_or(false);
-
-    if !already_configured {
-        // Check if pam_cap.so exists
-        let pam_cap_exists = Path::new("/lib/security/pam_cap.so").exists()
-            || Path::new("/lib/aarch64-linux-gnu/security/pam_cap.so").exists()
-            || Path::new("/lib/x86_64-linux-gnu/security/pam_cap.so").exists();
-
-        if pam_cap_exists {
-            if let Ok(mut contents) = fs::read_to_string(pam_auth) {
-                contents.push('\n');
-                contents.push_str(pam_cap_line);
-                contents.push('\n');
-                match fs::write(pam_auth, contents) {
-                    Ok(()) => log("Added pam_cap.so to /etc/pam.d/common-auth"),
-                    Err(e) => {
-                        let msg = format!("Failed to update PAM config: {}", e);
-                        result.warnings.push(msg.clone());
-                        if !quiet {
-                            eprintln!("[AppArmor WARN] {}", msg);
-                        }
-                        return;
-                    }
-                }
-            }
-        } else {
-            let msg = "pam_cap.so not found — install libpam-cap for capability restrictions";
-            result.warnings.push(msg.into());
-            if !quiet {
-                eprintln!("[AppArmor WARN] {}", msg);
-            }
-            return;
+    if let Ok(contents) = fs::read_to_string(pam_auth) {
+        if contents.contains("pam_cap") {
+            let cleaned: String = contents.lines()
+                .filter(|line| !line.contains("pam_cap"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let _ = fs::write(pam_auth, format!("{}\n", cleaned));
+            log("Removed stale pam_cap.so from /etc/pam.d/common-auth");
         }
-    } else {
-        log("pam_cap already configured in PAM stack");
     }
 
     result.pam_cap_applied = true;

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! API key vault proxy with DLP (Data Loss Prevention) scanning.
 //!
 //! Provides a reverse proxy that maps virtual API keys to real ones, preventing
@@ -15,6 +18,7 @@ use hyper::{Body, Client, Request, Response, Server, StatusCode, Uri};
 use regex::Regex;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 struct ProxyState {
@@ -148,6 +152,70 @@ pub enum DlpResult {
         body: String,
         alerts: Vec<(String, Severity, String)>,
     },
+}
+
+/// Runtime state for an active credential mapping.
+#[derive(Debug, Clone)]
+pub struct CredentialState {
+    pub virtual_key: String,
+    pub created_at: Instant,
+    pub ttl: Option<Duration>,
+    pub revoked: bool,
+    pub revoke_reason: Option<String>,
+}
+
+impl CredentialState {
+    pub fn new(mapping: &KeyMapping) -> Self {
+        Self {
+            virtual_key: mapping.virtual_key.clone(),
+            created_at: Instant::now(),
+            ttl: mapping.ttl_secs.map(Duration::from_secs),
+            revoked: false,
+            revoke_reason: None,
+        }
+    }
+
+    pub fn is_expired(&self) -> bool {
+        if let Some(ttl) = self.ttl {
+            self.created_at.elapsed() > ttl
+        } else {
+            false
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        !self.revoked && !self.is_expired()
+    }
+
+    pub fn revoke(&mut self, reason: &str) {
+        self.revoked = true;
+        self.revoke_reason = Some(reason.to_string());
+    }
+}
+
+/// Check if a credential is allowed for the given request path.
+/// Returns Ok(()) if allowed, Err(reason) if denied.
+pub fn check_credential_access(
+    mapping: &KeyMapping,
+    state: &CredentialState,
+    request_path: &str,
+) -> Result<(), String> {
+    if !state.is_active() {
+        if state.revoked {
+            return Err(format!("Credential revoked: {}",
+                state.revoke_reason.as_deref().unwrap_or("unknown")));
+        }
+        return Err("Credential expired (TTL exceeded)".to_string());
+    }
+
+    // Check path scope
+    if !mapping.allowed_paths.is_empty() {
+        if !mapping.allowed_paths.iter().any(|p| request_path.starts_with(p)) {
+            return Err(format!("Path '{}' not in allowed paths", request_path));
+        }
+    }
+
+    Ok(())
 }
 
 async fn handle_request(
@@ -291,12 +359,18 @@ mod tests {
                 real: "sk-ant-api03-REAL".to_string(),
                 provider: "anthropic".to_string(),
                 upstream: "https://api.anthropic.com".to_string(),
+                ttl_secs: None,
+                allowed_paths: vec![],
+                revoke_at_risk: 0.0,
             },
             KeyMapping {
                 virtual_key: "vk-openai-001".to_string(),
                 real: "sk-REAL".to_string(),
                 provider: "openai".to_string(),
                 upstream: "https://api.openai.com".to_string(),
+                ttl_secs: None,
+                allowed_paths: vec![],
+                revoke_at_risk: 0.0,
             },
         ]
     }
@@ -568,6 +642,9 @@ mod tests {
             real: "sk-NEW".to_string(),
             provider: "anthropic".to_string(),
             upstream: "https://api.anthropic.com".to_string(),
+            ttl_secs: None,
+            allowed_paths: vec![],
+            revoke_at_risk: 0.0,
         }];
         assert_eq!(lookup_virtual_key(&m, "vk-v2").unwrap().0, "sk-NEW");
         assert!(lookup_virtual_key(&m, "vk-anthropic-001").is_none());
@@ -590,5 +667,88 @@ mod tests {
             DlpResult::Blocked { pattern_name } => assert_eq!(pattern_name, "gcp-key"),
             _ => panic!("GCP key should block"),
         }
+    }
+
+    // ═══════════════════════ CREDENTIAL SCOPING TESTS ═══════════════════════
+
+    fn scoped_mapping(ttl: Option<u64>, paths: Vec<&str>) -> KeyMapping {
+        KeyMapping {
+            virtual_key: "vk-scoped-001".to_string(),
+            real: "sk-REAL".to_string(),
+            provider: "anthropic".to_string(),
+            upstream: "https://api.anthropic.com".to_string(),
+            ttl_secs: ttl,
+            allowed_paths: paths.into_iter().map(|s| s.to_string()).collect(),
+            revoke_at_risk: 0.0,
+        }
+    }
+
+    #[test]
+    fn test_credential_state_active() {
+        let mapping = scoped_mapping(Some(3600), vec![]);
+        let state = CredentialState::new(&mapping);
+        assert!(state.is_active(), "Newly created credential should be active");
+        assert!(!state.is_expired(), "Newly created credential should not be expired");
+        assert!(!state.revoked, "Newly created credential should not be revoked");
+    }
+
+    #[test]
+    fn test_credential_state_expired() {
+        let mapping = scoped_mapping(Some(0), vec![]);
+        let state = CredentialState::new(&mapping);
+        // TTL of 0 seconds means already expired
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        assert!(state.is_expired(), "Credential with 0s TTL should be expired");
+        assert!(!state.is_active(), "Expired credential should not be active");
+    }
+
+    #[test]
+    fn test_credential_state_no_ttl() {
+        let mapping = scoped_mapping(None, vec![]);
+        let state = CredentialState::new(&mapping);
+        assert!(!state.is_expired(), "Credential without TTL should never expire");
+        assert!(state.is_active(), "Credential without TTL should be active");
+        assert!(state.ttl.is_none(), "TTL should be None");
+    }
+
+    #[test]
+    fn test_credential_revoked() {
+        let mapping = scoped_mapping(Some(3600), vec![]);
+        let mut state = CredentialState::new(&mapping);
+        state.revoke("risk score exceeded threshold");
+        assert!(state.revoked, "Credential should be revoked");
+        assert!(!state.is_active(), "Revoked credential should not be active");
+        assert_eq!(
+            state.revoke_reason.as_deref(),
+            Some("risk score exceeded threshold"),
+            "Revoke reason should be preserved"
+        );
+    }
+
+    #[test]
+    fn test_check_access_allowed_path() {
+        let mapping = scoped_mapping(Some(3600), vec!["/v1/messages"]);
+        let state = CredentialState::new(&mapping);
+        let result = check_credential_access(&mapping, &state, "/v1/messages");
+        assert!(result.is_ok(), "Request to allowed path should succeed");
+    }
+
+    #[test]
+    fn test_check_access_denied_path() {
+        let mapping = scoped_mapping(Some(3600), vec!["/v1/messages"]);
+        let state = CredentialState::new(&mapping);
+        let result = check_credential_access(&mapping, &state, "/v1/completions");
+        assert!(result.is_err(), "Request to unauthorized path should fail");
+        let err = result.unwrap_err();
+        assert!(err.contains("not in allowed paths"), "Error should mention path restriction: {}", err);
+    }
+
+    #[test]
+    fn test_check_access_empty_paths_allows_all() {
+        let mapping = scoped_mapping(Some(3600), vec![]);
+        let state = CredentialState::new(&mapping);
+        assert!(check_credential_access(&mapping, &state, "/v1/messages").is_ok());
+        assert!(check_credential_access(&mapping, &state, "/v1/completions").is_ok());
+        assert!(check_credential_access(&mapping, &state, "/anything/at/all").is_ok());
     }
 }

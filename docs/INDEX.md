@@ -36,12 +36,14 @@ Quick map to every doc in this project. Start with what you need.
 | [NOISE-ANALYSIS.md](NOISE-ANALYSIS.md) | Analysis of 18h production logs — alert volumes, noise sources, signal quality |
 | [TUNING.md](TUNING.md) | Tuning guide — reducing noise, adjusting thresholds, filter recipes |
 | [POC-RESULTS.md](POC-RESULTS.md) | Attack simulation POC results — 10 tests, 90% detection rate |
+| [Findings Report (2026-02-18)](findings-2026-02-18-enterprise-readiness.md) | Enterprise readiness findings: current strengths, critical gaps, and hardening priorities |
 
 ## Design Plans
 
 | Document | What's in it |
 |----------|-------------|
 | [Runtime Abstraction Phase 1 Design](plans/2026-02-18-runtime-abstraction-phase1-design.md) | Parity-first refactor plan for detector/source abstractions and hardcoding removal |
+| [Enterprise Hardening Roadmap](plans/2026-02-18-enterprise-agent-security-hardening-roadmap.md) | Post-ClawHavoc enterprise strategy: privileged abuse remediation, identity-first controls, and adoption package |
 | [Tinman Coverage Design](plans/2026-02-17-tinman-coverage-design.md) | Gap analysis and design for Tinman eval harness attack coverage |
 | [Tinman Coverage Implementation](plans/2026-02-17-tinman-coverage-implementation.md) | Implementation plan for 7 Tinman attack categories |
 

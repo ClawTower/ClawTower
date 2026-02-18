@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! ClawTower — Tamper-proof security watchdog for AI agents.
 //!
 //! This is the main entry point. It handles CLI argument parsing, privilege escalation
@@ -27,24 +30,31 @@
 //! Sources → raw_tx → Aggregator → alert_tx → TUI/headless + slack_tx → Slack
 
 mod admin;
+mod agent_profile;
 mod alerts;
 mod aggregator;
 mod apparmor;
 mod capabilities;
+mod capability;
 mod correlator;
 mod detect;
+mod export;
 mod memory_sentinel;
 mod process_cage;
 mod api;
 mod audit_chain;
+mod auth_hooks;
 mod auditd;
 mod behavior;
+mod cloud;
 mod cognitive;
+mod compliance;
 mod config;
 mod config_merge;
 mod sentinel;
 mod falco;
 mod firewall;
+mod identity;
 mod journald;
 mod logtamper;
 mod netpolicy;
@@ -99,6 +109,7 @@ COMMANDS:
     configure            Interactive configuration wizard
     update               Self-update to latest GitHub release
     scan                 Run a one-shot security scan and exit
+    compliance-report    Generate a compliance report (SOC2/NIST/CIS)
     verify-key           Verify admin key from stdin (or --key flag)
     verify-audit [PATH]  Verify audit chain integrity
     setup                Install ClawTower as a system service
@@ -108,6 +119,7 @@ COMMANDS:
     generate-key         Generate admin key (called by harden, idempotent)
     setup-apparmor       Install AppArmor profiles (or pam_cap fallback)
     uninstall            Reverse hardening + remove ClawTower (requires admin key)
+    profile list         List available deployment profiles
     sync                 Update SecureClaw pattern databases
     logs                 Tail the service logs (journalctl)
     help                 Show this help message
@@ -116,6 +128,7 @@ COMMANDS:
 EXAMPLES:
     clawtower                           Start TUI dashboard
     clawtower run --headless            Run as background daemon
+    clawtower run --profile=production  Run with production profile
     clawtower configure                 Set up Slack, watched users, etc.
     clawtower scan                      Quick security scan
     sudo clawtower update               Self-update to latest release
@@ -210,6 +223,116 @@ fn run_script(name: &str, extra_args: &[String]) -> Result<()> {
         anyhow::bail!("{} exited with code {}", name, status.code().unwrap_or(-1));
     }
     Ok(())
+}
+
+/// Strip the immutable flag (chattr +i) from a file or directory.
+/// Three-level fallback:
+///   1. Direct ioctl (bypasses AppArmor on /usr/bin/chattr)
+///   2. External chattr command (works when AppArmor profiles aren't loaded)
+///   3. systemd-run chattr (runs in PID 1's scope, bypasses dropped bounding set)
+fn strip_immutable_flag(path: &str) {
+    use std::os::unix::io::AsRawFd;
+
+    if !Path::new(path).exists() {
+        return;
+    }
+
+    // Try direct ioctl first
+    if let Ok(file) = std::fs::File::open(path) {
+        let fd = file.as_raw_fd();
+        let mut flags: libc::c_long = 0;
+        let ret = unsafe { libc::ioctl(fd, 0x80086601_u64, &mut flags as *mut libc::c_long) };
+        if ret == 0 && (flags & 0x10) != 0 {
+            flags &= !0x10;
+            let ret = unsafe { libc::ioctl(fd, 0x40086602_u64, &flags as *const libc::c_long) };
+            if ret == 0 {
+                eprintln!("  chattr -i {} (ioctl)", path);
+                return;
+            }
+        } else if ret == 0 {
+            // File exists but doesn't have immutable flag — nothing to do
+            return;
+        }
+        drop(file);
+    }
+
+    // Fallback: external chattr command
+    if let Ok(o) = std::process::Command::new("chattr").args(["-i", path]).output() {
+        if o.status.success() {
+            eprintln!("  chattr -i {} (cmd)", path);
+            return;
+        }
+    }
+
+    // Final fallback: systemd-run runs in PID 1's scope, which has the full
+    // capability bounding set (not affected by pam_cap session restrictions).
+    if let Ok(o) = std::process::Command::new("systemd-run")
+        .args(["--wait", "--collect", "--quiet", "chattr", "-i", path])
+        .output()
+    {
+        if o.status.success() {
+            eprintln!("  chattr -i {} (systemd-run)", path);
+            return;
+        }
+        let stderr = String::from_utf8_lossy(&o.stderr);
+        eprintln!("  chattr -i {}: all methods failed ({})", path, stderr.trim());
+    }
+}
+
+/// Pre-harden cleanup: remove immutable flags and AppArmor profiles that
+/// would otherwise block install.sh from modifying protected files.
+fn pre_harden_cleanup() {
+    eprintln!("[PRE-HARDEN] Stripping immutable flags...");
+
+    // Capability check for diagnostics
+    let cap_status = std::process::Command::new("cat")
+        .arg("/proc/self/status")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_default();
+    for line in cap_status.lines() {
+        if line.starts_with("Cap") {
+            eprintln!("  {}", line);
+        }
+    }
+
+    // Directories first (must be writable before files inside can be created)
+    let all_paths = [
+        "/etc/clawtower",
+        "/etc/clawtower/config.d",
+        "/var/log/clawtower",
+        "/usr/local/bin/clawtower",
+        "/usr/local/bin/clawsudo",
+        "/etc/clawtower/config.toml",
+        "/etc/clawtower/admin.key.hash",
+        "/etc/clawtower/preload-policy.json",
+        "/etc/systemd/system/clawtower.service",
+        "/etc/sudoers.d/010_openclaw",
+        "/usr/local/lib/clawtower/libclawguard.so",
+    ];
+    for path in &all_paths {
+        strip_immutable_flag(path);
+    }
+    // Unload AppArmor protection profiles (may fail if profiles can't parse — that's OK)
+    let _ = std::process::Command::new("apparmor_parser")
+        .args(["-R", "/etc/apparmor.d/etc.clawtower.protect"])
+        .output();
+
+    // Clean up stale pam_cap entry that drops CAP_LINUX_IMMUTABLE from all sessions.
+    // Use systemd-run so sed can write even if the current session lacks capabilities.
+    let pam_auth = "/etc/pam.d/common-auth";
+    if let Ok(contents) = std::fs::read_to_string(pam_auth) {
+        if contents.contains("pam_cap") {
+            let cleaned: String = contents.lines()
+                .filter(|line| !line.contains("pam_cap"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            if std::fs::write(pam_auth, format!("{}\n", cleaned)).is_ok() {
+                eprintln!("[PRE-HARDEN] Removed stale pam_cap from {}", pam_auth);
+            }
+        }
+    }
 }
 
 /// Bootstrap /etc/clawtower with default config and directory structure.
@@ -377,18 +500,25 @@ async fn async_main() -> Result<()> {
             return run_install(force);
         }
         "configure" => {
-            // Remove immutable flag so configure.sh can edit config
-            let conf = Path::new("/etc/clawtower/config.toml");
-            let _ = std::process::Command::new("chattr").args(["-i", conf.to_str().unwrap_or_default()]).status();
+            // Remove immutable flag so configure.sh can edit config (direct ioctl
+            // bypasses AppArmor deny on /usr/bin/chattr)
+            strip_immutable_flag("/etc/clawtower/config.toml");
             let result = run_script("configure.sh", &rest_args);
-            // Re-lock config after configure
-            let _ = std::process::Command::new("chattr").args(["+i", conf.to_str().unwrap_or_default()]).status();
+            // Re-lock config after configure — use chattr here since AppArmor
+            // only blocks the deny direction, or fall back silently
+            let _ = std::process::Command::new("chattr").args(["+i", "/etc/clawtower/config.toml"]).status();
             return result;
         }
         "setup" => {
             return run_script("setup.sh", &rest_args);
         }
         "harden" => {
+            // Pre-cleanup: strip immutable flags and unload AppArmor profiles.
+            // On a previously hardened system, AppArmor deny rules block even
+            // root's /usr/bin/cp and /usr/bin/chattr from touching protected
+            // paths. The clawtower binary itself is unconfined, so we do the
+            // ioctl-based flag removal here before install.sh runs.
+            pre_harden_cleanup();
             return run_script("install.sh", &rest_args);
         }
         "generate-key" => {
@@ -411,6 +541,9 @@ async fn async_main() -> Result<()> {
             return Ok(());
         }
         "uninstall" => {
+            // Same pre-cleanup as harden — strip immutable flags so uninstall.sh
+            // can remove protected files even with AppArmor profiles active.
+            pre_harden_cleanup();
             return run_script("uninstall.sh", &rest_args);
         }
         "sync" => {
@@ -460,6 +593,79 @@ async fn async_main() -> Result<()> {
             eprintln!("Score: {}/{} checks passed", pass_count, total);
             return Ok(());
         }
+        "profile" => {
+            let sub = rest_args.first().map(|s| s.as_str()).unwrap_or("list");
+            match sub {
+                "list" => {
+                    eprintln!("Available profiles:");
+                    let dirs = [
+                        PathBuf::from("/etc/clawtower/profiles"),
+                        PathBuf::from("profiles"),
+                    ];
+                    let mut found = false;
+                    for dir in &dirs {
+                        if let Ok(entries) = std::fs::read_dir(dir) {
+                            for entry in entries.flatten() {
+                                let path = entry.path();
+                                if path.extension().and_then(|e| e.to_str()) == Some("toml") {
+                                    let name = path.file_stem()
+                                        .and_then(|s| s.to_str())
+                                        .unwrap_or("?");
+                                    // Read first comment line as description
+                                    let desc = std::fs::read_to_string(&path).ok()
+                                        .and_then(|c| c.lines()
+                                            .find(|l| l.starts_with("# ClawTower Profile:"))
+                                            .map(|l| l.trim_start_matches("# ClawTower Profile:").trim().to_string()))
+                                        .unwrap_or_default();
+                                    eprintln!("  {:<25} {}", name, desc);
+                                    found = true;
+                                }
+                            }
+                        }
+                    }
+                    if !found {
+                        eprintln!("  (no profiles found in /etc/clawtower/profiles/ or ./profiles/)");
+                    }
+                    eprintln!();
+                    eprintln!("Usage: clawtower run --profile=<name>");
+                }
+                _ => {
+                    eprintln!("Unknown profile subcommand: {}", sub);
+                    eprintln!("Usage: clawtower profile list");
+                }
+            }
+            return Ok(());
+        }
+        "compliance-report" => {
+            let framework = rest_args.iter()
+                .find_map(|a| a.strip_prefix("--framework="))
+                .unwrap_or("soc2");
+            let period = rest_args.iter()
+                .find_map(|a| a.strip_prefix("--period="))
+                .and_then(|p| p.trim_end_matches('d').parse::<u32>().ok())
+                .unwrap_or(30);
+            let output_format = rest_args.iter()
+                .find_map(|a| a.strip_prefix("--format="))
+                .unwrap_or("text");
+            let output_path = rest_args.iter()
+                .find_map(|a| a.strip_prefix("--output="));
+
+            // Generate report (empty data = baseline report showing all controls)
+            let report = compliance::generate_report(framework, period, &[], &[]);
+
+            let output = match output_format {
+                "json" => compliance::report_to_json(&report),
+                _ => compliance::report_to_text(&report),
+            };
+
+            if let Some(path) = output_path {
+                std::fs::write(path, &output)?;
+                eprintln!("Report written to {}", path);
+            } else {
+                println!("{}", output);
+            }
+            return Ok(());
+        }
         _ => {
             // Fall through to normal watchdog startup
         }
@@ -481,6 +687,11 @@ async fn async_main() -> Result<()> {
 
     let headless = run_args.iter().any(|a| a.as_str() == "--headless")
         || unsafe { libc::isatty(0) == 0 };
+
+    // Parse --profile=<name> flag
+    let profile_name: Option<String> = run_args.iter().find_map(|a| {
+        a.strip_prefix("--profile=").map(|s| s.to_string())
+    });
 
     // If running in TUI mode, stop the background service to avoid port/socket conflicts
     if !headless {
@@ -507,8 +718,27 @@ async fn async_main() -> Result<()> {
     let config_d = config_path.parent()
         .unwrap_or(Path::new("/etc/clawtower"))
         .join("config.d");
-    let config = Config::load_with_overrides(&config_path, &config_d)?;
-    eprintln!("Config loaded (with overlays from {})", config_d.display());
+
+    // Resolve profile path: look in /etc/clawtower/profiles/ then ./profiles/
+    let profile_path: Option<PathBuf> = profile_name.as_ref().map(|name| {
+        let system_path = PathBuf::from(format!("/etc/clawtower/profiles/{}.toml", name));
+        if system_path.exists() {
+            system_path
+        } else {
+            PathBuf::from(format!("profiles/{}.toml", name))
+        }
+    });
+
+    let config = Config::load_with_profile_and_overrides(
+        &config_path,
+        profile_path.as_deref(),
+        &config_d,
+    )?;
+    if let Some(ref name) = profile_name {
+        eprintln!("Config loaded with profile '{}' (overlays from {})", name, config_d.display());
+    } else {
+        eprintln!("Config loaded (with overlays from {})", config_d.display());
+    }
     let notifier = SlackNotifier::new(&config.slack);
     let min_slack_level = Severity::from_str(&config.slack.min_slack_level);
 
@@ -695,7 +925,21 @@ async fn async_main() -> Result<()> {
     let alert_store = api::new_shared_store(1000);
 
     // Spawn aggregator (sits between raw sources and TUI/Slack)
-    let agg_config = AggregatorConfig::default();
+    // Use tightened config if incident mode is active (config flag or runtime lockfile)
+    let agg_config = if config.incident_mode.enabled
+        || Path::new("/var/run/clawtower/incident-mode.active").exists()
+    {
+        eprintln!("INCIDENT MODE ACTIVE — tightened aggregation ({}s dedup, {} rate limit)",
+            config.incident_mode.dedup_window_secs, config.incident_mode.rate_limit_per_source);
+        AggregatorConfig {
+            dedup_window: std::time::Duration::from_secs(config.incident_mode.dedup_window_secs),
+            scan_dedup_window: std::time::Duration::from_secs(config.incident_mode.scan_dedup_window_secs),
+            rate_limit_per_source: config.incident_mode.rate_limit_per_source,
+            rate_limit_window: std::time::Duration::from_secs(60),
+        }
+    } else {
+        AggregatorConfig::default()
+    };
     let min_slack = min_slack_level;
     let agg_store = alert_store.clone();
     tokio::spawn(async move {

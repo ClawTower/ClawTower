@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2025-2026 JR Morton
+
 //! Real-time file integrity sentinel with quarantine and restore.
 //!
 //! Uses `notify` (inotify on Linux) to watch configured file paths for changes.
@@ -117,7 +120,7 @@ fn policy_for_path(config: &SentinelConfig, path: &str) -> Option<WatchPolicy> {
                 .map(|f| f.to_string_lossy().to_string())
                 .unwrap_or_default();
             for pattern in &wp.patterns {
-                if pattern == "*" || filename == *pattern {
+                if pattern == "*" || glob_match::glob_match(pattern, &filename) {
                     return Some(wp.policy.clone());
                 }
             }
@@ -960,6 +963,37 @@ mod tests {
         let config = SentinelConfig::default();
         let policy = policy_for_path(&config, "/home/openclaw/.openclaw/workspace/superpowers/skills/some_skill/README.md");
         assert!(policy.is_none());
+    }
+
+    #[test]
+    fn test_policy_for_path_glob_json_match() {
+        // The .openclaw directory watch uses *.json glob pattern — must match any JSON
+        let config = SentinelConfig::default();
+        let policy = policy_for_path(&config, "/home/openclaw/.openclaw/device.json");
+        assert!(matches!(policy, Some(WatchPolicy::Protected)),
+            "device.json should match *.json glob in .openclaw dir watch");
+        let policy2 = policy_for_path(&config, "/home/openclaw/.openclaw/openclaw.json");
+        assert!(matches!(policy2, Some(WatchPolicy::Protected)),
+            "openclaw.json should match *.json glob in .openclaw dir watch");
+        let policy3 = policy_for_path(&config, "/home/openclaw/.openclaw/settings.json");
+        assert!(matches!(policy3, Some(WatchPolicy::Protected)),
+            "settings.json should match *.json glob in .openclaw dir watch");
+    }
+
+    #[test]
+    fn test_policy_for_path_glob_rejects_non_json() {
+        let config = SentinelConfig::default();
+        let policy = policy_for_path(&config, "/home/openclaw/.openclaw/README.txt");
+        assert!(policy.is_none(), "non-JSON file should not match *.json glob");
+    }
+
+    #[test]
+    fn test_policy_for_path_credentials_glob_match() {
+        // Verify credentials/*.json glob also works after glob_match fix
+        let config = SentinelConfig::default();
+        let policy = policy_for_path(&config, "/home/openclaw/.openclaw/credentials/creds.json");
+        assert!(matches!(policy, Some(WatchPolicy::Protected)),
+            "creds.json should match *.json glob in credentials dir");
     }
 
     #[test]
