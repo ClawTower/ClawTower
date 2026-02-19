@@ -30,6 +30,10 @@ use self::merge::merge_toml;
 pub struct Config {
     pub general: GeneralConfig,
     pub slack: SlackConfig,
+    #[serde(default)]
+    pub discord: DiscordConfig,
+    #[serde(default)]
+    pub tray: TrayConfig,
     pub auditd: AuditdConfig,
     pub network: NetworkConfig,
     #[serde(default)]
@@ -217,10 +221,81 @@ pub struct SlackConfig {
     /// Interval in seconds for periodic health heartbeat to Slack (0 = disabled)
     #[serde(default = "default_heartbeat_interval")]
     pub heartbeat_interval: u64,
+    /// Slack Bot Token (xoxb-...) for interactive Block Kit messages
+    #[serde(default)]
+    pub app_token: String,
+    /// Slack signing secret for verifying interactive callbacks
+    #[serde(default)]
+    pub signing_secret: String,
+    /// Channel for approval requests (defaults to main channel if empty)
+    #[serde(default)]
+    pub approval_channel: String,
 }
 
 fn default_heartbeat_interval() -> u64 {
     3600
+}
+
+/// Discord notification and approval configuration.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct DiscordConfig {
+    /// Enable/disable Discord integration
+    #[serde(default)]
+    pub enabled: bool,
+    /// Discord bot token
+    #[serde(default)]
+    pub bot_token: String,
+    /// Discord application public key for verifying interactions
+    #[serde(default)]
+    pub public_key: String,
+    /// Channel ID for approval requests
+    #[serde(default)]
+    pub approval_channel_id: String,
+    /// Channel ID for alert notifications
+    #[serde(default)]
+    pub notification_channel_id: String,
+    /// Minimum severity level for Discord notifications
+    #[serde(default = "default_min_notification_level")]
+    pub min_notification_level: String,
+}
+
+fn default_min_notification_level() -> String { "warning".to_string() }
+
+impl Default for DiscordConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            bot_token: String::new(),
+            public_key: String::new(),
+            approval_channel_id: String::new(),
+            notification_channel_id: String::new(),
+            min_notification_level: default_min_notification_level(),
+        }
+    }
+}
+
+/// System tray notification and approval configuration.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct TrayConfig {
+    /// Enable/disable system tray integration
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Show desktop notifications for alerts
+    #[serde(default = "default_true")]
+    pub notifications: bool,
+    /// Allow approval/deny actions from tray notifications
+    #[serde(default = "default_true")]
+    pub approval_actions: bool,
+}
+
+impl Default for TrayConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            notifications: true,
+            approval_actions: true,
+        }
+    }
 }
 
 /// Auditd log monitoring configuration.
@@ -1373,5 +1448,40 @@ interval = 3600
             cors_origin: None,
         };
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_discord_config_defaults() {
+        let config: DiscordConfig = toml::from_str("").unwrap();
+        assert!(!config.enabled);
+        assert!(config.bot_token.is_empty());
+        assert!(config.public_key.is_empty());
+        assert!(config.approval_channel_id.is_empty());
+        assert!(config.notification_channel_id.is_empty());
+        assert_eq!(config.min_notification_level, "warning");
+    }
+
+    #[test]
+    fn test_tray_config_defaults() {
+        let config: TrayConfig = toml::from_str("").unwrap();
+        assert!(config.enabled);
+        assert!(config.notifications);
+        assert!(config.approval_actions);
+    }
+
+    #[test]
+    fn test_slack_config_new_fields_default() {
+        let toml_str = r##"
+            webhook_url = "https://hooks.slack.com/test"
+            channel = "#alerts"
+            min_slack_level = "warning"
+        "##;
+        let config: SlackConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.webhook_url, "https://hooks.slack.com/test");
+        assert_eq!(config.channel, "#alerts");
+        assert_eq!(config.min_slack_level, "warning");
+        assert!(config.app_token.is_empty());
+        assert!(config.signing_secret.is_empty());
+        assert!(config.approval_channel.is_empty());
     }
 }
