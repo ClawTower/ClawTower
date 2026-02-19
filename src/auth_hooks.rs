@@ -10,6 +10,8 @@
 //! Integrates with the identity registry (risk/trust state) and response engine
 //! (approval workflow).
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 

@@ -122,6 +122,7 @@ impl AuditChain {
     /// When an HMAC secret is provided, `append()` uses HMAC-SHA256 instead of
     /// plain SHA-256, making the chain unforgeable without the secret key.
     /// Use [`AuditChain::verify_with_hmac`] to verify HMAC-protected chains.
+    #[allow(dead_code)]
     pub fn new_with_hmac<P: AsRef<Path>>(path: P, hmac_secret: Option<String>) -> Result<Self> {
         let path_ref = path.as_ref().to_path_buf();
 
@@ -254,6 +255,7 @@ impl AuditChain {
     ///
     /// Use this for chains created with [`AuditChain::new_with_hmac`]. The same secret
     /// used during creation must be provided for verification to succeed.
+    #[allow(dead_code)]
     pub fn verify_with_hmac(path: &Path, secret: &str) -> Result<u64> {
         let file = fs::File::open(path).context("Failed to open audit chain file")?;
         let reader = BufReader::new(file);

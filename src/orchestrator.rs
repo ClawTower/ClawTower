@@ -225,6 +225,11 @@ pub async fn run_watchdog(state: AppState, receivers: AlertReceivers) -> Result<
         eprintln!("Admin key init: {} (non-fatal, admin socket will still start)", e);
     }
     let socket_dir = PathBuf::from("/var/run/clawtower");
+    // RuntimeDirectory is cleaned up when systemd stops the service,
+    // so re-create it if we're running as root (TUI mode after service stop).
+    if !socket_dir.exists() && unsafe { libc::getuid() } == 0 {
+        let _ = std::fs::create_dir_all(&socket_dir);
+    }
     let socket_path = if socket_dir.exists() && std::fs::metadata(&socket_dir).map(|m| {
         use std::os::unix::fs::MetadataExt;
         m.uid() == unsafe { libc::getuid() } || unsafe { libc::getuid() } == 0

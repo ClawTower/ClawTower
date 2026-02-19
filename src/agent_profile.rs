@@ -15,6 +15,8 @@
 //! Profiles are translated into sentinel `WatchPathConfig` entries at startup
 //! via [`generate_watch_paths`].
 
+#![allow(dead_code, unused_imports)]
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};

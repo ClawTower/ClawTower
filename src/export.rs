@@ -220,6 +220,7 @@ pub struct ExportAlert {
     pub hostname: String,
 }
 
+#[allow(dead_code)]
 impl ExportAlert {
     /// Convert an Alert into an ExportAlert with metadata.
     pub fn from_alert(alert: &Alert, version: &str, hostname: &str) -> Self {

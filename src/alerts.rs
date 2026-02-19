@@ -92,18 +92,21 @@ impl Alert {
     }
 
     /// Attach an agent name to this alert.
+    #[allow(dead_code)]
     pub fn with_agent(mut self, agent: &str) -> Self {
         self.agent_name = Some(agent.to_string());
         self
     }
 
     /// Attach a skill name to this alert.
+    #[allow(dead_code)]
     pub fn with_skill(mut self, skill: &str) -> Self {
         self.skill_name = Some(skill.to_string());
         self
     }
 
     /// Attach the IOC database version that triggered this alert.
+    #[allow(dead_code)]
     pub fn with_ioc_version(mut self, version: &str) -> Self {
         self.ioc_version = Some(version.to_string());
         self

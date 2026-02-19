@@ -335,6 +335,7 @@ impl Default for SentinelConfig {
 /// patterns = ["*"]
 /// policy = "protected"
 /// ```
+#[allow(dead_code)]
 pub fn load_default_watch_paths(path: &Path) -> Result<Vec<WatchPathConfig>> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read watch paths file: {}", path.display()))?;
@@ -419,12 +420,19 @@ pub fn is_log_rotation(file_path: &str) -> bool {
 }
 
 /// Resolve which WatchPolicy applies to a path, if any.
+///
+/// Uses most-specific-match semantics: exact path matches always win,
+/// and for directory prefix matches the longest prefix takes priority.
+/// This prevents broad directory rules from shadowing specific file overrides.
 fn policy_for_path(config: &SentinelConfig, path: &str) -> Option<WatchPolicy> {
+    let mut best_prefix_match: Option<(usize, WatchPolicy)> = None;
+
     for wp in &config.watch_paths {
+        // Exact file path match — maximally specific, return immediately
         if path == wp.path {
             return Some(wp.policy.clone());
         }
-        // Directory prefix match — check if file is INSIDE the watched directory.
+        // Directory prefix match — collect and pick longest prefix later.
         // Guard: the character after the prefix must be '/' to confirm it's a
         // directory boundary, not just a filename prefix (e.g. "auth-profiles.json"
         // must NOT match "auth-profiles.json.lock").
@@ -435,12 +443,15 @@ fn policy_for_path(config: &SentinelConfig, path: &str) -> Option<WatchPolicy> {
                 .unwrap_or_default();
             for pattern in &wp.patterns {
                 if pattern == "*" || glob_match::glob_match(pattern, &filename) {
-                    return Some(wp.policy.clone());
+                    if best_prefix_match.as_ref().map(|(len, _)| wp.path.len() > *len).unwrap_or(true) {
+                        best_prefix_match = Some((wp.path.len(), wp.policy.clone()));
+                    }
+                    break;
                 }
             }
         }
     }
-    None
+    best_prefix_match.map(|(_, policy)| policy)
 }
 
 /// Real-time file integrity monitor using inotify.
@@ -1291,6 +1302,34 @@ mod tests {
         let config = SentinelConfig::default();
         let policy = policy_for_path(&config, "/home/openclaw/.openclaw/agents/main/sessions/sessions.json.lock");
         assert!(policy.is_none(), "sessions lockfile should not match, got: {:?}", policy);
+    }
+
+    #[test]
+    fn test_policy_for_path_sessions_json_is_watched_not_protected() {
+        // Regression: the broad .openclaw/*.json Protected rule must NOT shadow
+        // the specific sessions.json Watched rule (most-specific-match semantics).
+        let config = SentinelConfig::default();
+        let policy = policy_for_path(&config, "/home/openclaw/.openclaw/agents/main/sessions/sessions.json");
+        assert_eq!(policy, Some(WatchPolicy::Watched),
+            "sessions.json must be Watched (not Protected by the .openclaw/*.json catch-all)");
+    }
+
+    #[test]
+    fn test_policy_for_path_auth_profiles_is_watched_not_protected() {
+        // Same regression class: exact-path Watched must beat directory Protected
+        let config = SentinelConfig::default();
+        let policy = policy_for_path(&config, "/home/openclaw/.openclaw/agents/main/agent/auth-profiles.json");
+        assert_eq!(policy, Some(WatchPolicy::Watched),
+            "auth-profiles.json must be Watched (not Protected by the .openclaw/*.json catch-all)");
+    }
+
+    #[test]
+    fn test_policy_for_path_device_json_is_protected() {
+        // Files directly in .openclaw/ should still be Protected by the catch-all
+        let config = SentinelConfig::default();
+        let policy = policy_for_path(&config, "/home/openclaw/.openclaw/device.json");
+        assert_eq!(policy, Some(WatchPolicy::Protected),
+            "device.json in .openclaw root should be Protected");
     }
 
     #[test]

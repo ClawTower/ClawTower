@@ -238,6 +238,7 @@ pub enum DlpResult {
 
 /// Runtime state for an active credential mapping.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct CredentialState {
     pub virtual_key: String,
     pub created_at: Instant,
@@ -269,6 +270,7 @@ impl CredentialState {
         !self.revoked && !self.is_expired()
     }
 
+    #[allow(dead_code)]
     pub fn revoke(&mut self, reason: &str) {
         self.revoked = true;
         self.revoke_reason = Some(reason.to_string());

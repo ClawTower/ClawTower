@@ -10,6 +10,8 @@
 //! Risk scores increase on Critical/Warning alerts and decay over time. Trust levels
 //! can be set administratively or automatically demoted on high risk.
 
+#![allow(dead_code, unused_imports)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};

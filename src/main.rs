@@ -60,6 +60,7 @@ mod seccomp;
 mod barnacle;
 mod slack;
 mod tui;
+mod tui_client;
 mod response;
 mod update;
 mod util;
@@ -112,25 +113,7 @@ async fn async_main() -> Result<()> {
         a.strip_prefix("--profile=").map(|s| s.to_string())
     });
 
-    // If running in TUI mode, stop the background service to avoid port/socket conflicts
-    if !headless {
-        let service_was_running = std::process::Command::new("systemctl")
-            .args(["is-active", "--quiet", "clawtower"])
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if service_was_running {
-            eprintln!("Stopping clawtower service for TUI mode...");
-            let _ = std::process::Command::new("sudo")
-                .args(["systemctl", "stop", "clawtower"])
-                .status();
-            std::thread::sleep(std::time::Duration::from_millis(500));
-        }
-        if service_was_running {
-            std::env::set_var("CLAWTOWER_RESTART_SERVICE", "1");
-        }
-    }
-
+    // ── Config loading (needed before API probe for client mode) ────────────
     let config_d = config_path.parent()
         .unwrap_or(Path::new("/etc/clawtower"))
         .join("config.d");
@@ -150,6 +133,32 @@ async fn async_main() -> Result<()> {
         eprintln!("Config loaded with profile '{}' (overlays from {})", name, config_d.display());
     } else {
         eprintln!("Config loaded (with overlays from {})", config_d.display());
+    }
+
+    // ── TUI client mode: connect to running service if reachable ─────────
+    if !headless {
+        let connect_addr = if config.api.bind == "0.0.0.0" { "127.0.0.1" } else { &config.api.bind };
+        if tui_client::service_api_reachable(connect_addr, config.api.port).await {
+            eprintln!("ClawTower service detected. Starting TUI in client mode...");
+            return tui_client::run_client_tui(&config, config_path).await;
+        }
+
+        // Service API not reachable — stop service and run full watchdog
+        let service_was_running = std::process::Command::new("systemctl")
+            .args(["is-active", "--quiet", "clawtower"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if service_was_running {
+            eprintln!("Stopping clawtower service for TUI mode...");
+            let _ = std::process::Command::new("sudo")
+                .args(["systemctl", "stop", "clawtower"])
+                .status();
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        if service_was_running {
+            std::env::set_var("CLAWTOWER_RESTART_SERVICE", "1");
+        }
     }
 
     // Build state and hand off to orchestrator

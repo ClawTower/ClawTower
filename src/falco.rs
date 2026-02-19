@@ -40,6 +40,7 @@ pub fn parse_falco_line(line: &str) -> Option<Alert> {
 }
 
 /// Tail the Falco JSON log file and send alerts
+#[allow(dead_code)]
 pub async fn tail_falco_log(
     path: &Path,
     tx: mpsc::Sender<Alert>,

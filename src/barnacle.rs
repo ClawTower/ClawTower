@@ -83,6 +83,7 @@ pub struct CompiledPattern {
 
 /// Result of checking text against patterns
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct PatternMatch {
     pub database: String,     // which DB matched
     pub category: String,
@@ -197,6 +198,7 @@ impl BarnacleEngine {
     /// If `ioc_pubkey_path` points to a valid Ed25519 public key file,
     /// each JSON database is verified against its `.sig` sidecar. Warnings
     /// are logged for unsigned or invalid bundles, but loading proceeds.
+    #[allow(dead_code)]
     pub fn load_verified<P: AsRef<Path>>(config_dir: P, ioc_pubkey_path: Option<&Path>) -> Result<Self> {
         let engine = Self::load(&config_dir)?;
 
@@ -546,6 +548,7 @@ impl BarnacleEngine {
 
 /// Metadata about an IOC bundle after verification.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct IocBundleMetadata {
     pub path: String,
     pub version: String,
@@ -650,6 +653,7 @@ impl IocBundleVerifier {
     /// This is the safe entry point: it logs warnings but never fails. Use this
     /// when loading databases at startup so that a missing or bad signature does
     /// not prevent the engine from operating.
+    #[allow(dead_code)]
     pub fn verify_or_warn(&self, json_path: &Path) -> IocBundleMetadata {
         match self.verify_bundle(json_path) {
             Ok(meta) => {

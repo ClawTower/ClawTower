@@ -54,6 +54,7 @@ pub fn parse_samhain_line(line: &str) -> Option<Alert> {
 }
 
 /// Tail the Samhain log file and send alerts
+#[allow(dead_code)]
 pub async fn tail_samhain_log(
     path: &Path,
     tx: mpsc::Sender<Alert>,

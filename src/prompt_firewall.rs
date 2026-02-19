@@ -40,6 +40,7 @@ pub enum FirewallAction {
 
 /// A single pattern match with metadata.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct FirewallMatch {
     pub category: ThreatCategory,
     pub pattern_name: String,
@@ -213,6 +214,7 @@ impl PromptFirewall {
         Ok(Self { scanners })
     }
 
+    #[allow(dead_code)]
     pub fn category_count(&self) -> usize {
         self.scanners.len()
     }

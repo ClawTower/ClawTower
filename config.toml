@@ -30,7 +30,7 @@ log_path = "/var/log/samhain/samhain.log"
 
 [api]
 enabled = true
-bind = "0.0.0.0"
+bind = "127.0.0.1"
 port = 18791
 
 [scans]

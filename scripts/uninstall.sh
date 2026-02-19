@@ -546,10 +546,12 @@ if command -v falco &>/dev/null || [[ -f /etc/falco/rules.d/openclaw_rules.yaml 
     fi
     if command -v falco &>/dev/null; then
         if ask "Also completely uninstall Falco? (not just rules)" "n"; then
-            sudo systemctl stop falco 2>/dev/null || true
-            sudo systemctl disable falco 2>/dev/null || true
+            for svc in falco falco-kmod falco-bpf falco-modern-bpf falco-custom falcoctl-artifact-follow; do
+                sudo systemctl stop "$svc" 2>/dev/null || true
+                sudo systemctl disable "$svc" 2>/dev/null || true
+            done
             if dpkg -l falco &>/dev/null 2>&1; then
-                sudo apt-get remove -y falco 2>/dev/null || true
+                sudo apt-get remove -y falco 2>&1 | grep -v 'Failed to disable unit' || true
             else
                 # Tarball install — remove manually
                 sudo rm -f /usr/bin/falco /usr/local/bin/falco

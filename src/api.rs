@@ -252,6 +252,7 @@ async fn handle(
 <li><a href="/api/alerts">/api/alerts</a> — Recent alerts</li>
 <li><a href="/api/security">/api/security</a> — Security posture</li>
 <li><a href="/api/pending">/api/pending</a> — Pending approval actions</li>
+<li><a href="/api/scans">/api/scans</a> — Scanner results</li>
 <li><a href="/api/evidence">/api/evidence</a> — Enterprise evidence bundle</li>
 </ul></body></html>"#;
             Response::builder()
@@ -376,6 +377,22 @@ async fn handle(
                 json_response(StatusCode::SERVICE_UNAVAILABLE, r#"{"error":"response engine not enabled"}"#.to_string(), ctx.cors_origin.as_deref())
             }
         }
+        "/api/scans" => {
+            if let Some(ref sr) = ctx.scan_results {
+                let results = sr.lock().await;
+                let items: Vec<serde_json::Value> = results.iter().map(|r| {
+                    serde_json::json!({
+                        "category": r.category,
+                        "status": format!("{:?}", r.status),
+                        "details": r.details,
+                        "timestamp": r.timestamp.to_rfc3339(),
+                    })
+                }).collect();
+                json_response(StatusCode::OK, serde_json::to_string(&items).unwrap(), ctx.cors_origin.as_deref())
+            } else {
+                json_response(StatusCode::OK, "[]".to_string(), ctx.cors_origin.as_deref())
+            }
+        }
         path if path.starts_with("/api/evidence") => {
             let params = parse_query_params(req.uri());
             let framework = params.get("framework").map(|s| s.as_str()).unwrap_or("soc2");
@@ -485,6 +502,7 @@ async fn handle(
 ///
 /// Runs indefinitely, serving requests against the shared alert store.
 /// For full evidence bundle support, use [`run_api_server_with_context`] instead.
+#[allow(dead_code)]
 pub async fn run_api_server(
     bind: &str,
     port: u16,

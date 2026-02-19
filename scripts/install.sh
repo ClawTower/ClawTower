@@ -82,7 +82,15 @@ elif [[ -f "$BINARY_SRC" ]]; then
 else
     die "Binary not found at $BINARY_SRC or $INSTALLED_BIN — deploy first"
 fi
-[[ -f "$CONFIG_SRC" ]] || die "Config not found at $CONFIG_SRC"
+SKIP_CONFIG_INSTALL=0
+if [[ ! -f "$CONFIG_SRC" ]]; then
+    if [[ -f /etc/clawtower/config.toml ]]; then
+        log "Config already installed at /etc/clawtower/config.toml — keeping deployed version"
+        SKIP_CONFIG_INSTALL=1
+    else
+        die "Config not found at $CONFIG_SRC or /etc/clawtower/config.toml"
+    fi
+fi
 
 # ── 1. Create system user ────────────────────────────────────────────────────
 log "Creating clawtower system user..."
@@ -203,8 +211,12 @@ if [[ $SKIP_BINARY_INSTALL -eq 0 ]]; then
 else
     log "Skipping binary install (already at $INSTALLED_BIN)"
 fi
-cp "$CONFIG_SRC" /etc/clawtower/config.toml
-chmod 644 /etc/clawtower/config.toml
+if [[ $SKIP_CONFIG_INSTALL -eq 0 ]]; then
+    cp "$CONFIG_SRC" /etc/clawtower/config.toml
+    chmod 644 /etc/clawtower/config.toml
+else
+    log "Skipping config install (already at /etc/clawtower/config.toml)"
+fi
 chown -R clawtower:clawtower /etc/clawtower /var/log/clawtower /var/run/clawtower
 
 # Create config.d directory for user overrides
@@ -257,7 +269,12 @@ done
 
 # ── 4b. Generate admin key (one-time, idempotent) ─────────────────────────────
 log "Generating admin key..."
-/usr/local/bin/clawtower generate-key || die "Admin key generation failed"
+/usr/local/bin/clawtower generate-key
+_key_rc=$?
+if [ "$_key_rc" -eq 1 ]; then
+    die "Admin key generation failed"
+fi
+# _key_rc: 0 = new key generated and displayed, 2 = key already existed
 
 # ── 4c. Auditd tamper-detection rules ────────────────────────────────────────
 log "Installing auditd tamper-detection rules..."
@@ -385,7 +402,15 @@ fi
 SUDOERS_SRC="$(dirname "$(realpath "$0")")/../policies/sudoers-openclaw.conf"
 SUDOERS_DEST="/etc/sudoers.d/010_openclaw"
 do_chattr -i "$SUDOERS_DEST" || true
-cp "$SUDOERS_SRC" "$SUDOERS_DEST"
+if [[ ! -f "$SUDOERS_SRC" ]]; then
+    if [[ -f "$SUDOERS_DEST" ]]; then
+        log "Sudoers already installed at $SUDOERS_DEST — keeping deployed version"
+    else
+        warn "Sudoers not found at $SUDOERS_SRC or $SUDOERS_DEST — skipping"
+    fi
+else
+    cp "$SUDOERS_SRC" "$SUDOERS_DEST"
+fi
 chmod 0440 "$SUDOERS_DEST"
 # Validate sudoers
 visudo -cf "$SUDOERS_DEST" || die "Invalid sudoers file!"
@@ -429,9 +454,14 @@ echo -e "    ${DIM}clawtower uninstall${NC}        Uninstall ${DIM}(requires adm
 echo ""
 sep
 echo ""
-echo -e "  ${RED}┃${NC} ${RED}${BOLD}Save your admin key${NC} — it was displayed above."
-echo -e "  ${RED}┃${NC} ${DIM}It is the only way to uninstall or manage ClawTower.${NC}"
-echo -e "  ${RED}┃${NC} ${DIM}Without it, your only option is recovery mode (boot from USB).${NC}"
+if [ "${_key_rc:-0}" -eq 0 ]; then
+    echo -e "  ${RED}┃${NC} ${RED}${BOLD}Save your admin key${NC} — it was displayed above."
+    echo -e "  ${RED}┃${NC} ${DIM}It is the only way to uninstall or manage ClawTower.${NC}"
+    echo -e "  ${RED}┃${NC} ${DIM}Without it, your only option is recovery mode (boot from USB).${NC}"
+else
+    echo -e "  ${DIM}┃${NC} ${DIM}Admin key was previously generated — not shown again.${NC}"
+    echo -e "  ${DIM}┃${NC} ${DIM}If you've lost it, the only recovery option is boot from USB.${NC}"
+fi
 echo ""
 
 # ── 12. Build and install LD_PRELOAD guard ────────────────────────────────

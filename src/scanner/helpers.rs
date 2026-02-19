@@ -137,6 +137,7 @@ pub fn compute_file_sha256(path: &str) -> Result<String, String> {
 }
 
 /// Read a file and return its lines as a Vec<String>, or an empty vec on failure.
+#[allow(dead_code)]
 pub fn read_lines_from_file(path: &str) -> Vec<String> {
     std::fs::read_to_string(path)
         .map(|content| content.lines().map(String::from).collect())
@@ -148,6 +149,7 @@ pub fn read_lines_from_file(path: &str) -> Vec<String> {
 /// - If `issues` is empty, returns `Pass` with "No issues found".
 /// - If `issues.len() > warn_threshold`, returns `Fail`.
 /// - Otherwise returns `Warn` with the issues joined.
+#[allow(dead_code)]
 pub fn finalize_scan(category: &str, issues: &[String], warn_threshold: usize) -> ScanResult {
     if issues.is_empty() {
         ScanResult::new(category, ScanStatus::Pass, &format!("No {} issues found", category))

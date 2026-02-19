@@ -743,7 +743,9 @@ if [[ "$api_input" =~ ^[nN] ]]; then
     sed -i '/^\[api\]/,/^$/s/^enabled = true/enabled = false/' "$CONF"
     log "API disabled"
 else
-    log "API enabled on port 18791"
+    # Ensure API binds to localhost by default (non-loopback requires auth_token)
+    sed -i '/^\[api\]/,/^$/s/^bind = .*/bind = "127.0.0.1"/' "$CONF"
+    log "API enabled on 127.0.0.1:18791"
 fi
 
 # ── BarnacleDefense ───────────────────────────────────────────────────────────
@@ -838,21 +840,14 @@ if [[ ${#EXISTING_ADMINS[@]} -gt 0 ]]; then
         read -r create_admin < /dev/tty
     fi
 else
-    echo -en "  ${AMBER}▸${NC} Create a human admin account? [Y/n]: ${NC}" > /dev/tty
-    read -r create_admin < /dev/tty
+    # No admin accounts detected — one is required, ask for the username directly
+    echo -en "  ${AMBER}▸${NC} Username for new admin account: ${NC}" > /dev/tty
+    read -r ADMIN_USERNAME < /dev/tty
+    [[ -n "$ADMIN_USERNAME" ]] || die "A human admin account is required. Re-run the installer and provide a username."
+    create_admin="y"
 fi
 
-if [[ "$create_admin" =~ ^[nN] && ${#EXISTING_ADMINS[@]} -eq 0 ]]; then
-    echo ""
-    warn "No admin account found and none being created."
-    echo -en "  ${AMBER}▸${NC} Do you already have a separate admin account? [y/N]: ${NC}" > /dev/tty
-    read -r has_admin < /dev/tty
-    if [[ ! "$has_admin" =~ ^[yY] ]]; then
-        die "Cannot proceed without a human admin account. Re-run the installer and create one."
-    fi
-fi
-
-if [[ ! "$create_admin" =~ ^[nN] ]]; then
+if [[ ! "$create_admin" =~ ^[nN] && -z "$ADMIN_USERNAME" ]]; then
     echo -en "  ${AMBER}▸${NC} Username for admin account: ${NC}" > /dev/tty
     read -r ADMIN_USERNAME < /dev/tty
     [[ -n "$ADMIN_USERNAME" ]] || { warn "No username provided — skipping admin account"; ADMIN_USERNAME=""; }

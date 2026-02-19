@@ -427,7 +427,8 @@ pub async fn dispatch_subcommand(subcommand: &str, rest_args: &[String], all_arg
         "generate-key" => {
             let hash_path = std::path::Path::new("/etc/clawtower/admin.key.hash");
             match crate::admin::generate_and_show_admin_key(hash_path) {
-                Ok(_) => Ok(true),
+                Ok(true) => Ok(true),   // new key generated
+                Ok(false) => std::process::exit(2), // key already existed
                 Err(e) => {
                     eprintln!("Failed to generate admin key: {}", e);
                     std::process::exit(1);

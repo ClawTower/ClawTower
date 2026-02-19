@@ -10,6 +10,8 @@
 //! This flips the detection model from "match known bad" to "flag anything outside
 //! known good" — much harder for an attacker to evade.
 
+#![allow(dead_code)]
+
 use crate::agent_profile::CapabilitiesConfig;
 use crate::alerts::Severity;
 

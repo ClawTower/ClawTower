@@ -226,7 +226,7 @@ pub struct AuditdConfig {
 }
 
 // Network config types moved to network.rs — re-exported for backward compatibility
-pub use crate::network::{NetworkConfig, default_allowlisted_cidrs, default_allowlisted_ports};
+pub use crate::network::NetworkConfig;
 
 /// Falco eBPF integration configuration.
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -317,7 +317,7 @@ impl ApiConfig {
 }
 
 // Proxy config types moved to proxy.rs — re-exported for backward compatibility
-pub use crate::proxy::{ProxyConfig, KeyMapping, DlpConfig, DlpPattern};
+pub use crate::proxy::ProxyConfig;
 
 /// Prompt firewall configuration — intercepts malicious prompts before they reach LLM providers.
 ///
@@ -391,7 +391,7 @@ pub use crate::response::{ResponseConfig, IncidentModeConfig};
 pub use crate::cloud::CloudConfig;
 
 // Export config types moved to export.rs — re-exported for backward compatibility
-pub use crate::export::{ExportConfig, SyslogExportConfig, WebhookExportConfig, FileExportConfig};
+pub use crate::export::ExportConfig;
 
 // Sentinel config types moved to sentinel.rs — re-exported for backward compatibility
 pub use crate::sentinel::{SentinelConfig, WatchPathConfig, WatchPolicy};
@@ -440,6 +440,7 @@ impl Config {
 
     /// Load config from base path, then merge overlays from config_d directory.
     /// Files in config_d are loaded in alphabetical order.
+    #[allow(dead_code)]
     pub fn load_with_overrides(base_path: &Path, config_d: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(base_path)
             .with_context(|| format!("Failed to read config: {}", base_path.display()))?;
@@ -483,6 +484,7 @@ impl Config {
         Ok(config)
     }
 
+    #[allow(dead_code)]
     pub fn validate(&self) -> Vec<String> {
         let mut warnings = Vec::new();
         if (self.api.port as u32) > 65535 { warnings.push("api.port out of range".into()); }
