@@ -23,6 +23,9 @@ use hyper::{Body, Request, Response, Server, StatusCode};
 use serde::Serialize;
 use tokio::sync::{mpsc, Mutex};
 
+use crate::approval::{
+    ApprovalOrchestrator, ApprovalRequest, ApprovalResolution, ApprovalSource, ApprovalStatus,
+};
 use crate::core::alerts::{Alert, Severity};
 use crate::core::response::{ResponseRequest, SharedPendingActions};
 use crate::scanner::SharedScanResults;
@@ -167,6 +170,10 @@ pub struct ApiContext {
     pub policy_dir: Option<PathBuf>,
     pub barnacle_dir: Option<PathBuf>,
     pub active_profile: Option<String>,
+    // Approval orchestrator (None if approval system not enabled)
+    pub orchestrator: Option<Arc<ApprovalOrchestrator>>,
+    /// Slack signing secret for verifying interactive webhook callbacks.
+    pub slack_signing_secret: String,
 }
 
 #[derive(Serialize)]
@@ -235,7 +242,9 @@ async fn handle(
             .map(|v| constant_time_eq(v.strip_prefix("Bearer ").unwrap_or(""), &ctx.auth_token))
             .unwrap_or(false);
 
-        if !authorized && req.uri().path() != "/api/health" {
+        let path = req.uri().path();
+        let auth_exempt = matches!(path, "/api/health" | "/api/hooks/slack" | "/api/hooks/discord");
+        if !authorized && !auth_exempt {
             return Ok(Response::builder()
                 .status(StatusCode::UNAUTHORIZED)
                 .header("WWW-Authenticate", "Bearer")
@@ -256,6 +265,11 @@ async fn handle(
 <li><a href="/api/pending">/api/pending</a> — Pending approval actions</li>
 <li><a href="/api/scans">/api/scans</a> — Scanner results</li>
 <li><a href="/api/evidence">/api/evidence</a> — Enterprise evidence bundle</li>
+<li>POST /api/approvals — Submit approval request</li>
+<li>GET /api/approvals/{id} — Poll approval status</li>
+<li>POST /api/approvals/{id}/resolve — Resolve approval</li>
+<li>POST /api/hooks/slack — Slack interactive callback</li>
+<li>POST /api/hooks/discord — Discord interaction (stub)</li>
 </ul></body></html>"#;
             Response::builder()
                 .header("Content-Type", "text/html")
@@ -490,6 +504,219 @@ async fn handle(
 
             json_response(StatusCode::OK, serde_json::to_string(&bundle).unwrap(), ctx.cors_origin.as_deref())
         }
+
+        // ── Approval endpoints ────────────────────────────────────────────────
+        "/api/approvals" if req.method() == &hyper::Method::POST => {
+            if let Some(ref orch) = ctx.orchestrator {
+                let body_bytes = hyper::body::to_bytes(req.into_body()).await.unwrap_or_default();
+                let body_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap_or_default();
+
+                let command = body_json.get("command").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let agent = body_json.get("agent").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+                let context = body_json.get("context").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let severity_str = body_json.get("severity").and_then(|v| v.as_str()).unwrap_or("warning");
+                let severity = match severity_str.to_lowercase().as_str() {
+                    "critical" | "crit" => Severity::Critical,
+                    "info" => Severity::Info,
+                    _ => Severity::Warning,
+                };
+                let timeout_secs = body_json.get("timeout_secs").and_then(|v| v.as_u64()).unwrap_or(300);
+
+                let request = ApprovalRequest::new(
+                    ApprovalSource::ClawSudo { policy_rule: None },
+                    command,
+                    agent,
+                    severity,
+                    context,
+                    std::time::Duration::from_secs(timeout_secs),
+                );
+
+                match orch.submit(request).await {
+                    Ok(id) => json_response(
+                        StatusCode::OK,
+                        serde_json::json!({ "id": id }).to_string(),
+                        ctx.cors_origin.as_deref(),
+                    ),
+                    Err(e) => json_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        serde_json::json!({ "error": format!("submit failed: {}", e) }).to_string(),
+                        ctx.cors_origin.as_deref(),
+                    ),
+                }
+            } else {
+                json_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    r#"{"error":"approval orchestrator not enabled"}"#.to_string(),
+                    ctx.cors_origin.as_deref(),
+                )
+            }
+        }
+        path if path.starts_with("/api/approvals/") && path.ends_with("/resolve") => {
+            if req.method() != &hyper::Method::POST {
+                json_response(StatusCode::METHOD_NOT_ALLOWED, r#"{"error":"POST required"}"#.to_string(), ctx.cors_origin.as_deref())
+            } else if let Some(ref orch) = ctx.orchestrator {
+                let parts: Vec<&str> = path.split('/').collect();
+                // /api/approvals/{id}/resolve => ["", "api", "approvals", "{id}", "resolve"]
+                if parts.len() == 5 {
+                    let id = parts[3].to_string();
+                    let body_bytes = hyper::body::to_bytes(req.into_body()).await.unwrap_or_default();
+                    let body_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap_or_default();
+
+                    let approved = body_json.get("approved").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let by = body_json.get("by").and_then(|v| v.as_str()).unwrap_or("api_user").to_string();
+                    let via = body_json.get("via").and_then(|v| v.as_str()).unwrap_or("api").to_string();
+                    let message = body_json.get("message").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+                    let resolution = if approved {
+                        ApprovalResolution::Approved {
+                            by,
+                            via,
+                            message,
+                            at: chrono::Utc::now(),
+                        }
+                    } else {
+                        ApprovalResolution::Denied {
+                            by,
+                            via,
+                            message,
+                            at: chrono::Utc::now(),
+                        }
+                    };
+
+                    match orch.resolve(id, resolution).await {
+                        Ok(_) => json_response(
+                            StatusCode::OK,
+                            r#"{"ok":true}"#.to_string(),
+                            ctx.cors_origin.as_deref(),
+                        ),
+                        Err(e) => json_response(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            serde_json::json!({ "error": format!("resolve failed: {}", e) }).to_string(),
+                            ctx.cors_origin.as_deref(),
+                        ),
+                    }
+                } else {
+                    json_response(StatusCode::BAD_REQUEST, r#"{"error":"invalid path"}"#.to_string(), ctx.cors_origin.as_deref())
+                }
+            } else {
+                json_response(StatusCode::SERVICE_UNAVAILABLE, r#"{"error":"approval orchestrator not enabled"}"#.to_string(), ctx.cors_origin.as_deref())
+            }
+        }
+        path if path.starts_with("/api/approvals/") => {
+            if let Some(ref orch) = ctx.orchestrator {
+                let parts: Vec<&str> = path.split('/').collect();
+                // /api/approvals/{id} => ["", "api", "approvals", "{id}"]
+                if parts.len() == 4 {
+                    let id = parts[3];
+                    match orch.get_status(id) {
+                        Some(status) => {
+                            let status_str = match &status {
+                                ApprovalStatus::Pending => "pending".to_string(),
+                                ApprovalStatus::Resolved(ApprovalResolution::Approved { .. }) => "approved".to_string(),
+                                ApprovalStatus::Resolved(ApprovalResolution::Denied { .. }) => "denied".to_string(),
+                                ApprovalStatus::Resolved(ApprovalResolution::TimedOut { .. }) => "timed_out".to_string(),
+                            };
+                            json_response(
+                                StatusCode::OK,
+                                serde_json::json!({ "id": id, "status": status_str }).to_string(),
+                                ctx.cors_origin.as_deref(),
+                            )
+                        }
+                        None => json_response(
+                            StatusCode::NOT_FOUND,
+                            serde_json::json!({ "error": "approval not found" }).to_string(),
+                            ctx.cors_origin.as_deref(),
+                        ),
+                    }
+                } else {
+                    json_response(StatusCode::BAD_REQUEST, r#"{"error":"invalid path"}"#.to_string(), ctx.cors_origin.as_deref())
+                }
+            } else {
+                json_response(StatusCode::SERVICE_UNAVAILABLE, r#"{"error":"approval orchestrator not enabled"}"#.to_string(), ctx.cors_origin.as_deref())
+            }
+        }
+
+        // ── Webhook hook endpoints (auth exempt) ──────────────────────────────
+        "/api/hooks/slack" if req.method() == &hyper::Method::POST => {
+            if let Some(ref orch) = ctx.orchestrator {
+                let timestamp = req.headers()
+                    .get("X-Slack-Request-Timestamp")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .to_string();
+                let signature = req.headers()
+                    .get("X-Slack-Signature")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .to_string();
+
+                let body_bytes = hyper::body::to_bytes(req.into_body()).await.unwrap_or_default();
+                let body_str = String::from_utf8_lossy(&body_bytes).to_string();
+
+                // Verify Slack signature if signing secret is configured
+                if !ctx.slack_signing_secret.is_empty()
+                    && !crate::notify::slack::verify_slack_signature(
+                        &ctx.slack_signing_secret,
+                        &timestamp,
+                        &body_str,
+                        &signature,
+                    )
+                {
+                    return Ok(json_response(
+                        StatusCode::UNAUTHORIZED,
+                        r#"{"error":"invalid slack signature"}"#.to_string(),
+                        ctx.cors_origin.as_deref(),
+                    ));
+                }
+
+                match crate::notify::slack::parse_slack_interaction(&body_str) {
+                    Ok((request_id, approved, username)) => {
+                        let resolution = if approved {
+                            ApprovalResolution::Approved {
+                                by: username,
+                                via: "slack".to_string(),
+                                message: None,
+                                at: chrono::Utc::now(),
+                            }
+                        } else {
+                            ApprovalResolution::Denied {
+                                by: username,
+                                via: "slack".to_string(),
+                                message: None,
+                                at: chrono::Utc::now(),
+                            }
+                        };
+
+                        let _ = orch.resolve(request_id, resolution).await;
+                        // Slack expects a 200 with empty body
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .header("Content-Type", "application/json")
+                            .body(Body::empty())
+                            .unwrap()
+                    }
+                    Err(e) => json_response(
+                        StatusCode::BAD_REQUEST,
+                        serde_json::json!({ "error": format!("invalid slack payload: {}", e) }).to_string(),
+                        ctx.cors_origin.as_deref(),
+                    ),
+                }
+            } else {
+                json_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    r#"{"error":"approval orchestrator not enabled"}"#.to_string(),
+                    ctx.cors_origin.as_deref(),
+                )
+            }
+        }
+        "/api/hooks/discord" if req.method() == &hyper::Method::POST => {
+            json_response(
+                StatusCode::NOT_IMPLEMENTED,
+                r#"{"error":"discord webhook not implemented"}"#.to_string(),
+                ctx.cors_origin.as_deref(),
+            )
+        }
+
         _ => {
             let err = ErrorResponse {
                 error: "not found".to_string(),
@@ -525,6 +752,8 @@ pub async fn run_api_server(
         policy_dir: None,
         barnacle_dir: None,
         active_profile: None,
+        orchestrator: None,
+        slack_signing_secret: String::new(),
     });
     run_api_server_with_context(bind, port, ctx).await
 }
@@ -572,6 +801,8 @@ mod tests {
             policy_dir: None,
             barnacle_dir: None,
             active_profile: None,
+            orchestrator: None,
+            slack_signing_secret: String::new(),
         })
     }
 
@@ -589,6 +820,8 @@ mod tests {
             policy_dir: None,
             barnacle_dir: None,
             active_profile: None,
+            orchestrator: None,
+            slack_signing_secret: String::new(),
         })
     }
 
@@ -797,6 +1030,8 @@ mod tests {
             policy_dir: None,
             barnacle_dir: None,
             active_profile: None,
+            orchestrator: None,
+            slack_signing_secret: String::new(),
         });
         let req = Request::builder().uri("/api/health").body(Body::empty()).unwrap();
         let resp = handle(req, ctx).await.unwrap();

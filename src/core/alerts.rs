@@ -8,14 +8,14 @@
 //! to the TUI, Slack, API, and audit chain.
 
 use chrono::{DateTime, Local};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Alert severity level, ordered from lowest to highest.
 ///
 /// Used for filtering (e.g., minimum Slack notification level) and display styling.
 /// Implements `Ord` so `Critical > Warning > Info`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Severity {
     Info,
     Warning,

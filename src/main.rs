@@ -12,12 +12,14 @@
 
 // Directory modules
 mod agent;
+mod approval;
 mod behavior;
 mod config;
 mod core;
 mod detect;
 mod enforcement;
 mod interface;
+mod notify;
 mod policy;
 mod proxy;
 mod safe;
