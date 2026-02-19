@@ -8,15 +8,19 @@
 //! approval orchestrator.
 
 use std::fmt;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
 pub mod store;
 
 use crate::core::alerts::Severity;
+use crate::notify::{ChannelRegistry, NotificationChannel};
+use store::ApprovalStore;
 
 /// Where an approval request originated from.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -166,6 +170,175 @@ impl ApprovalRequest {
     }
 }
 
+/// The approval orchestrator — coordinates approval requests across all notification channels.
+///
+/// Receives approval requests (from clawsudo, the response engine, or the API),
+/// fans them out to every registered [`NotificationChannel`], then waits for the
+/// first resolution (approve / deny / timeout) and broadcasts that outcome back
+/// to the other channels.
+pub struct ApprovalOrchestrator {
+    store: Mutex<ApprovalStore>,
+    channels: ChannelRegistry,
+    request_tx: mpsc::Sender<ApprovalRequest>,
+    request_rx: Mutex<Option<mpsc::Receiver<ApprovalRequest>>>,
+    resolution_tx: mpsc::Sender<(String, ApprovalResolution)>,
+    resolution_rx: Mutex<Option<mpsc::Receiver<(String, ApprovalResolution)>>>,
+}
+
+impl ApprovalOrchestrator {
+    /// Create a new orchestrator with the given channel registry and history capacity.
+    pub fn new(channels: ChannelRegistry, max_history: usize) -> Self {
+        let (request_tx, request_rx) = mpsc::channel(100);
+        let (resolution_tx, resolution_rx) = mpsc::channel(100);
+        Self {
+            store: Mutex::new(ApprovalStore::new(max_history)),
+            channels,
+            request_tx,
+            request_rx: Mutex::new(Some(request_rx)),
+            resolution_tx,
+            resolution_rx: Mutex::new(Some(resolution_rx)),
+        }
+    }
+
+    /// Clone of the request sender (for API endpoints / clawsudo to submit requests).
+    pub fn request_tx(&self) -> mpsc::Sender<ApprovalRequest> {
+        self.request_tx.clone()
+    }
+
+    /// Clone of the resolution sender (for webhook callbacks / TUI to submit resolutions).
+    pub fn resolution_tx(&self) -> mpsc::Sender<(String, ApprovalResolution)> {
+        self.resolution_tx.clone()
+    }
+
+    /// Check the status of an approval request by ID.
+    pub fn get_status(&self, id: &str) -> Option<ApprovalStatus> {
+        let store = self.store.lock().unwrap();
+        if store.is_pending(id) {
+            Some(ApprovalStatus::Pending)
+        } else if let Some(resolution) = store.get_resolution(id) {
+            Some(ApprovalStatus::Resolved(resolution.clone()))
+        } else {
+            None
+        }
+    }
+
+    /// Number of currently pending approval requests.
+    pub fn pending_count(&self) -> usize {
+        self.store.lock().unwrap().pending_count()
+    }
+
+    /// Submit an approval request. Returns the request ID.
+    pub async fn submit(&self, request: ApprovalRequest) -> anyhow::Result<String> {
+        let id = request.id.clone();
+        self.request_tx.send(request).await?;
+        Ok(id)
+    }
+
+    /// Resolve an approval request by ID.
+    pub async fn resolve(&self, id: String, resolution: ApprovalResolution) -> anyhow::Result<()> {
+        self.resolution_tx.send((id, resolution)).await?;
+        Ok(())
+    }
+}
+
+/// Main orchestrator loop. Takes ownership of the rx halves from the orchestrator
+/// (via the `Mutex<Option<>>` pattern) and runs until all senders are dropped.
+pub async fn run_orchestrator(orchestrator: Arc<ApprovalOrchestrator>) {
+    let mut request_rx = orchestrator
+        .request_rx
+        .lock()
+        .unwrap()
+        .take()
+        .expect("run_orchestrator called more than once");
+    let mut resolution_rx = orchestrator
+        .resolution_rx
+        .lock()
+        .unwrap()
+        .take()
+        .expect("run_orchestrator called more than once");
+
+    let mut tick = tokio::time::interval(Duration::from_millis(500));
+
+    loop {
+        tokio::select! {
+            Some(request) = request_rx.recv() => {
+                let req_clone = request.clone();
+                let timeout_duration = request.timeout;
+                let req_id = request.id.clone();
+
+                // Insert into store
+                orchestrator.store.lock().unwrap().insert(request);
+
+                // Fan out to all available channels
+                for ch in orchestrator.channels.available() {
+                    let ch: Arc<dyn NotificationChannel> = Arc::clone(ch);
+                    let req = req_clone.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = ch.send_approval_request(&req).await {
+                            eprintln!("[approval] failed to send request to {}: {}", ch.name(), e);
+                        }
+                    });
+                }
+
+                // Spawn a timeout watcher
+                let res_tx = orchestrator.resolution_tx.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(timeout_duration).await;
+                    let _ = res_tx.send((
+                        req_id,
+                        ApprovalResolution::TimedOut { at: Utc::now() },
+                    )).await;
+                });
+            }
+            Some((id, resolution)) = resolution_rx.recv() => {
+                // Grab a clone of the request before resolving (resolve removes from pending)
+                let original_request = orchestrator.store.lock().unwrap().get(&id).cloned();
+
+                let was_pending = orchestrator.store.lock().unwrap().resolve(&id, resolution.clone());
+                if !was_pending {
+                    continue; // Duplicate or late resolution — silently drop
+                }
+
+                // Determine which channel resolved it so we skip notifying that one
+                let via = match &resolution {
+                    ApprovalResolution::Approved { via, .. } => Some(via.clone()),
+                    ApprovalResolution::Denied { via, .. } => Some(via.clone()),
+                    ApprovalResolution::TimedOut { .. } => None,
+                };
+
+                // Notify all other channels about the resolution
+                if let Some(req) = original_request {
+                    for ch in orchestrator.channels.available() {
+                        if let Some(ref v) = via {
+                            if ch.name() == v {
+                                continue; // Skip the channel that originated this resolution
+                            }
+                        }
+                        let ch: Arc<dyn NotificationChannel> = Arc::clone(ch);
+                        let req_clone = req.clone();
+                        let res_clone = resolution.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = ch.send_resolution(&req_clone, &res_clone).await {
+                                eprintln!("[approval] failed to send resolution to {}: {}", ch.name(), e);
+                            }
+                        });
+                    }
+                }
+            }
+            _ = tick.tick() => {
+                // Belt-and-suspenders: collect expired requests and send TimedOut resolutions
+                let expired = orchestrator.store.lock().unwrap().collect_expired();
+                for id in expired {
+                    let _ = orchestrator.resolution_tx.send((
+                        id,
+                        ApprovalResolution::TimedOut { at: Utc::now() },
+                    )).await;
+                }
+            }
+        }
+    }
+}
+
 /// Serde helper for `std::time::Duration` serialized as whole seconds (u64).
 mod duration_serde {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -184,6 +357,241 @@ mod duration_serde {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::notify::Notification;
+    use async_trait::async_trait;
+
+    /// Helper: create a test approval request with the given timeout.
+    fn make_request(timeout: Duration) -> ApprovalRequest {
+        ApprovalRequest::new(
+            ApprovalSource::ClawSudo {
+                policy_rule: Some("test-rule".to_string()),
+            },
+            "apt install curl".to_string(),
+            "openclaw".to_string(),
+            Severity::Warning,
+            "test context".to_string(),
+            timeout,
+        )
+    }
+
+    /// Mock notification channel that records calls via a shared log.
+    struct MockChannel {
+        channel_name: String,
+        log: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl MockChannel {
+        fn new(name: &str, log: Arc<std::sync::Mutex<Vec<String>>>) -> Self {
+            Self {
+                channel_name: name.to_string(),
+                log,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl NotificationChannel for MockChannel {
+        fn name(&self) -> &str {
+            &self.channel_name
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        async fn send_approval_request(&self, request: &ApprovalRequest) -> anyhow::Result<()> {
+            self.log.lock().unwrap().push(format!(
+                "{}:request:{}",
+                self.channel_name, request.id
+            ));
+            Ok(())
+        }
+
+        async fn send_resolution(
+            &self,
+            request: &ApprovalRequest,
+            resolution: &ApprovalResolution,
+        ) -> anyhow::Result<()> {
+            self.log.lock().unwrap().push(format!(
+                "{}:resolution:{}:{}",
+                self.channel_name, request.id, resolution
+            ));
+            Ok(())
+        }
+
+        async fn send_notification(&self, _notification: &Notification) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_orchestrator_submit_and_get_status() {
+        let orch = Arc::new(ApprovalOrchestrator::new(ChannelRegistry::new(), 100));
+        let orch2 = Arc::clone(&orch);
+        let handle = tokio::spawn(async move {
+            run_orchestrator(orch2).await;
+        });
+
+        let req = make_request(Duration::from_secs(300));
+        let id = orch.submit(req).await.expect("submit failed");
+
+        // Give the loop time to process
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert_eq!(orch.get_status(&id), Some(ApprovalStatus::Pending));
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_orchestrator_resolve_changes_status() {
+        let orch = Arc::new(ApprovalOrchestrator::new(ChannelRegistry::new(), 100));
+        let orch2 = Arc::clone(&orch);
+        let handle = tokio::spawn(async move {
+            run_orchestrator(orch2).await;
+        });
+
+        let req = make_request(Duration::from_secs(300));
+        let id = orch.submit(req).await.expect("submit failed");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        orch.resolve(
+            id.clone(),
+            ApprovalResolution::Approved {
+                by: "admin".to_string(),
+                via: "api".to_string(),
+                message: None,
+                at: Utc::now(),
+            },
+        )
+        .await
+        .expect("resolve failed");
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        match orch.get_status(&id) {
+            Some(ApprovalStatus::Resolved(ApprovalResolution::Approved { .. })) => {}
+            other => panic!("expected Resolved(Approved), got {:?}", other),
+        }
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_orchestrator_broadcasts_to_all_channels() {
+        let log = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let mut registry = ChannelRegistry::new();
+        registry.register(Arc::new(MockChannel::new("slack", Arc::clone(&log))));
+        registry.register(Arc::new(MockChannel::new("tui", Arc::clone(&log))));
+
+        let orch = Arc::new(ApprovalOrchestrator::new(registry, 100));
+        let orch2 = Arc::clone(&orch);
+        let handle = tokio::spawn(async move {
+            run_orchestrator(orch2).await;
+        });
+
+        let req = make_request(Duration::from_secs(300));
+        let id = orch.submit(req).await.expect("submit failed");
+
+        // Give spawned tasks time to execute
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let entries = log.lock().unwrap().clone();
+        let slack_received = entries
+            .iter()
+            .any(|e| e.starts_with("slack:request:") && e.ends_with(&id));
+        let tui_received = entries
+            .iter()
+            .any(|e| e.starts_with("tui:request:") && e.ends_with(&id));
+
+        assert!(
+            slack_received,
+            "slack should have received the request, log: {:?}",
+            entries
+        );
+        assert!(
+            tui_received,
+            "tui should have received the request, log: {:?}",
+            entries
+        );
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_orchestrator_first_responder_wins() {
+        let orch = Arc::new(ApprovalOrchestrator::new(ChannelRegistry::new(), 100));
+        let orch2 = Arc::clone(&orch);
+        let handle = tokio::spawn(async move {
+            run_orchestrator(orch2).await;
+        });
+
+        let req = make_request(Duration::from_secs(300));
+        let id = orch.submit(req).await.expect("submit failed");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // First resolution from slack
+        orch.resolve(
+            id.clone(),
+            ApprovalResolution::Approved {
+                by: "admin".to_string(),
+                via: "slack".to_string(),
+                message: None,
+                at: Utc::now(),
+            },
+        )
+        .await
+        .expect("resolve failed");
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Second resolution from tui — should be silently dropped
+        orch.resolve(
+            id.clone(),
+            ApprovalResolution::Denied {
+                by: "jr".to_string(),
+                via: "tui".to_string(),
+                message: None,
+                at: Utc::now(),
+            },
+        )
+        .await
+        .expect("resolve failed");
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Status should still reflect the first resolution (Approved via slack)
+        match orch.get_status(&id) {
+            Some(ApprovalStatus::Resolved(ApprovalResolution::Approved { via, .. })) => {
+                assert_eq!(via, "slack");
+            }
+            other => panic!("expected Resolved(Approved via slack), got {:?}", other),
+        }
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_orchestrator_timeout_resolves_as_timed_out() {
+        let orch = Arc::new(ApprovalOrchestrator::new(ChannelRegistry::new(), 100));
+        let orch2 = Arc::clone(&orch);
+        let handle = tokio::spawn(async move {
+            run_orchestrator(orch2).await;
+        });
+
+        let req = make_request(Duration::from_millis(50));
+        let id = orch.submit(req).await.expect("submit failed");
+
+        // Wait for the timeout to fire and be processed
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        match orch.get_status(&id) {
+            Some(ApprovalStatus::Resolved(ApprovalResolution::TimedOut { .. })) => {}
+            other => panic!("expected Resolved(TimedOut), got {:?}", other),
+        }
+
+        handle.abort();
+    }
 
     #[test]
     fn test_approval_request_creation() {
