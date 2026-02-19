@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use crate::safe_io::{atomic_write, mkdir_safe, open_nofollow, read_nofollow};
+use crate::safe::safe_io::{atomic_write, mkdir_safe, open_nofollow, read_nofollow};
 use crate::scanner::{ScanResult, ScanStatus};
 
 /// Protected cognitive files — changes are CRIT (tampering)

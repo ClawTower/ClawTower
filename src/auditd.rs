@@ -399,9 +399,9 @@ pub fn parse_to_event(line: &str, watched_users: Option<&[String]>) -> Option<Pa
         // watching UID "10" must NOT match uid=100 or uid=1000.
         // Parse both the line's uid/auid and watched UIDs as integers
         // for proper numeric comparison.
-        let line_uid = crate::safe_match::parse_audit_field(line, "uid")
+        let line_uid = crate::safe::safe_match::parse_audit_field(line, "uid")
             .and_then(|v| v.parse::<u64>().ok());
-        let line_auid = crate::safe_match::parse_audit_field(line, "auid")
+        let line_auid = crate::safe::safe_match::parse_audit_field(line, "auid")
             .and_then(|v| v.parse::<u64>().ok());
         let matches = users.iter().any(|uid_str| {
             if let Ok(watched_uid) = uid_str.parse::<u64>() {

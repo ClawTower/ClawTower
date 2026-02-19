@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use tokio::sync::{mpsc, watch};
 
 use crate::alerts::{Alert, Severity};
-use crate::safe_tail::SafeTailer;
+use crate::safe::safe_tail::SafeTailer;
 
 /// Map Falco priority string to our Severity
 fn falco_priority_to_severity(priority: &str) -> Severity {

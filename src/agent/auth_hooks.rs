@@ -15,7 +15,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-use crate::identity::TrustLevel;
+use crate::agent::identity::TrustLevel;
 
 /// The authorization decision for a requested action.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

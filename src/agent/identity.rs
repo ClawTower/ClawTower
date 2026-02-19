@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use crate::agent_profile::AgentProfile;
+use crate::agent::profile::AgentProfile;
 use crate::alerts::Severity;
 
 /// Trust level assigned to an agent. Determines baseline permissions.

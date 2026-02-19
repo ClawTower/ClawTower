@@ -17,7 +17,7 @@ use tokio::time::{sleep, Duration};
 use std::time::Duration as StdDuration;
 
 use crate::alerts::{Alert, Severity};
-use crate::safe_cmd::SafeCommand;
+use crate::safe::safe_cmd::SafeCommand;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FirewallBackend {

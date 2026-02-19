@@ -17,7 +17,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::safe_io::{atomic_write, mkdir_safe, redact_env};
+use crate::safe::safe_io::{atomic_write, mkdir_safe, redact_env};
 
 /// Default output directory for forensic dumps.
 pub const DEFAULT_FORENSICS_DIR: &str = "/var/lib/clawtower/forensics";

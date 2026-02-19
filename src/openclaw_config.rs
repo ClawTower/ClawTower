@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::scanner::{ScanResult, ScanStatus};
-use crate::safe_match::field_exact_match;
+use crate::safe::safe_match::field_exact_match;
 
 // ── Config types (moved from config.rs) ──────────────────────────────────────
 

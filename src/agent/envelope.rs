@@ -12,7 +12,7 @@
 
 #![allow(dead_code)]
 
-use crate::agent_profile::CapabilitiesConfig;
+use crate::agent::profile::CapabilitiesConfig;
 use crate::alerts::Severity;
 
 /// Result of checking an action against a capability envelope.

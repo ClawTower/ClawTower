@@ -45,7 +45,7 @@ impl NetPolicy {
                 // boundary-aware domain matching (prevents "evilopenai.com"
                 // from matching "*.openai.com", and handles case-insensitivity)
                 let host_allowed = self.allowed_hosts.iter().any(|pattern| {
-                    crate::safe_match::domain_matches(host, pattern)
+                    crate::safe::safe_match::domain_matches(host, pattern)
                 });
 
                 if host_allowed {
@@ -71,7 +71,7 @@ impl NetPolicy {
                 // Uses boundary-aware domain matching (case-insensitive,
                 // dot-boundary wildcards)
                 let host_blocked = self.blocked_hosts.iter().any(|pattern| {
-                    crate::safe_match::domain_matches(host, pattern)
+                    crate::safe::safe_match::domain_matches(host, pattern)
                 });
                 if host_blocked {
                     Some(Alert::new(

@@ -17,8 +17,8 @@ use tokio::sync::mpsc;
 use ipnet::IpNet;
 
 use crate::alerts::{Alert, Severity};
-use crate::safe_match::prefix_matches;
-use crate::safe_tail::SafeTailer;
+use crate::safe::safe_match::prefix_matches;
+use crate::safe::safe_tail::SafeTailer;
 
 // ── Config types (moved from config.rs) ──────────────────────────────────────
 

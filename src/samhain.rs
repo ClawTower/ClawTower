@@ -14,8 +14,8 @@ use tokio::sync::{mpsc, watch};
 use tokio::time::Duration;
 
 use crate::alerts::{Alert, Severity};
-use crate::safe_match::parse_log_severity;
-use crate::safe_tail::SafeTailer;
+use crate::safe::safe_match::parse_log_severity;
+use crate::safe::safe_tail::SafeTailer;
 
 /// Parse a Samhain log line into an Alert.
 /// Samhain log lines look like:

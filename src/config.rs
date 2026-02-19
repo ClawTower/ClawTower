@@ -510,6 +510,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proxy::KeyMapping;
 
     #[test]
     fn test_openclaw_config_defaults() {

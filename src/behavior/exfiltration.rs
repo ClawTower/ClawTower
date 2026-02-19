@@ -8,7 +8,7 @@
 //! scripted exfiltration, and data staging patterns.
 
 use crate::alerts::Severity;
-use crate::safe_match;
+use crate::safe::safe_match;
 use super::BehaviorCategory;
 use super::patterns::{
     EXFIL_COMMANDS, REMOTE_TRANSFER_COMMANDS, DNS_EXFIL_COMMANDS,
