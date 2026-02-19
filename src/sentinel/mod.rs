@@ -305,6 +305,12 @@ pub fn default_watch_paths() -> Vec<WatchPathConfig> {
             patterns: vec!["*.md".to_string()],
             policy: WatchPolicy::Watched,
         },
+        // OpenClaw extensions directory — detect plugin installation/modification
+        WatchPathConfig {
+            path: "/home/openclaw/.openclaw/extensions".to_string(),
+            patterns: vec!["*.js".to_string(), "*.json".to_string(), "package.json".to_string()],
+            policy: WatchPolicy::Watched,
+        },
     ]
 }
 
@@ -610,21 +616,33 @@ impl Sentinel {
     /// If content scanning is enabled, runs Barnacle patterns against the file.
     pub async fn handle_change(&self, path: &str) {
         let file_path = Path::new(path);
-        if !file_path.exists() {
+
+        // Use symlink_metadata (lstat) to avoid following symlinks.
+        // An attacker can replace a protected file with a symlink; metadata()
+        // would silently follow it, defeating integrity checks (TOCTOU).
+        let meta = match std::fs::symlink_metadata(file_path) {
+            Ok(m) => m,
+            Err(_) => return, // file gone
+        };
+
+        // Reject symlinks — a protected/watched path should never be a symlink.
+        // If it is, an attacker may be trying to redirect reads/writes.
+        if meta.file_type().is_symlink() {
+            self.alert(Severity::Critical, "sentinel",
+                &format!("SYMLINK ATTACK: protected/watched path is a symlink: {}", path),
+            ).await;
             return;
         }
 
         // Skip directory inodes — inotify fires Modify on parent dirs when
         // children change, but read_to_string() on a dir fails with EISDIR.
-        if file_path.is_dir() {
+        if meta.file_type().is_dir() {
             return;
         }
 
-        // Check file size limit
-        if let Ok(meta) = std::fs::metadata(file_path) {
-            if meta.len() > self.config.max_file_size_kb * 1024 {
-                return;
-            }
+        // Check file size limit (already using lstat metadata from above)
+        if meta.len() > self.config.max_file_size_kb * 1024 {
+            return;
         }
 
         // Log rotation check
@@ -662,7 +680,18 @@ impl Sentinel {
         };
 
         let shadow = shadow_path_for(&self.config.shadow_dir, path);
-        let shadow_exists = shadow.exists();
+        // Verify shadow is not a symlink (defense-in-depth: shadow dir is 0700,
+        // but if compromised, attacker could replace shadows with symlinks).
+        let shadow_exists = match std::fs::symlink_metadata(&shadow) {
+            Ok(sm) if sm.file_type().is_symlink() => {
+                self.alert(Severity::Critical, "sentinel",
+                    &format!("SYMLINK ATTACK: shadow copy is a symlink: {}", shadow.display()),
+                ).await;
+                return;
+            }
+            Ok(_) => true,
+            Err(_) => false,
+        };
         let previous = std::fs::read_to_string(&shadow).unwrap_or_default();
 
         if current == previous {
@@ -725,8 +754,13 @@ impl Sentinel {
                             &format!("Failed to quarantine {}: {}", path, e),
                         ).await;
                     }
-                    if shadow.exists() {
-                        if let Err(e) = std::fs::copy(&shadow, file_path) {
+                    if shadow_exists {
+                        // Re-check: reject if file was replaced with symlink since entry
+                        if file_path.is_symlink() {
+                            self.alert(Severity::Critical, "sentinel",
+                                &format!("SYMLINK ATTACK: {} became symlink during processing", path),
+                            ).await;
+                        } else if let Err(e) = std::fs::copy(&shadow, file_path) {
                             self.alert(Severity::Warning, "sentinel",
                                 &format!("Failed to restore {} from shadow: {}", path, e),
                             ).await;
@@ -776,8 +810,13 @@ impl Sentinel {
                 ).await;
             }
 
-            if shadow.exists() {
-                if let Err(e) = std::fs::copy(&shadow, file_path) {
+            if shadow_exists {
+                // Re-check: reject if file was replaced with symlink since entry
+                if file_path.is_symlink() {
+                    self.alert(Severity::Critical, "sentinel",
+                        &format!("SYMLINK ATTACK: {} became symlink during processing", path),
+                    ).await;
+                } else if let Err(e) = std::fs::copy(&shadow, file_path) {
                     self.alert(Severity::Warning, "sentinel",
                         &format!("Failed to restore {} from shadow: {}", path, e),
                     ).await;
@@ -2076,7 +2115,9 @@ mod tests {
     // --- Symlink handling ---
 
     #[tokio::test]
-    async fn test_symlink_target_is_read() {
+    async fn test_symlink_rejected_with_critical_alert() {
+        // Symlinks on watched/protected paths indicate a TOCTOU attack.
+        // The sentinel should emit a Critical alert and refuse to process.
         let tmp = std::env::temp_dir().join("sentinel_test_symlink");
         let _ = std::fs::remove_dir_all(&tmp);
         let shadow_dir = tmp.join("shadow");
@@ -2115,7 +2156,8 @@ mod tests {
         sentinel.handle_change(&link_path.to_string_lossy()).await;
 
         let alert = rx.try_recv().unwrap();
-        assert_eq!(alert.severity, Severity::Warning); // .md = cognitive
+        assert_eq!(alert.severity, Severity::Critical);
+        assert!(alert.message.contains("SYMLINK ATTACK"), "should identify symlink attack");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
