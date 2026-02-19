@@ -50,7 +50,7 @@ Without a CLA, every contributor retains exclusive copyright over their code, ma
 - **Bug fixes** with a test that reproduces the issue
 - **New security scanners** — see `CLAUDE.md` "Adding a New Scanner" for the pattern
 - **New monitoring sources** — see `CLAUDE.md` "Adding a New Monitoring Source"
-- **Detection rules** — new behavioral patterns in `src/behavior.rs`
+- **Detection rules** — new behavioral patterns in `src/behavior/mod.rs`
 - **Documentation** improvements
 - **Policy templates** — new YAML policies in `policies/`
 

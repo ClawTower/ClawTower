@@ -51,35 +51,165 @@ Sources (auditd, network, falco, samhain, SSH, firewall, scanner, sentinel, prox
 
 ### Module List
 
+Modules are organized into directories under `src/`. A few top-level files remain in `src/` directly.
+
+#### Top-level (`src/`)
+
 | Module | Purpose |
 |--------|---------|
 | `main.rs` | Entry point, CLI dispatch, spawns all tasks, wires channels |
+| `cli.rs` | CLI argument parsing and subcommand definitions |
+| `compliance.rs` | Compliance framework checks |
+| `netpolicy.rs` | Network policy engine (allowlist/blocklist mode for outbound connections) |
+
+#### `agent/` — AI agent integration
+
+| Module | Purpose |
+|--------|---------|
+| `profile.rs` | Agent profile definitions and management |
+| `envelope.rs` | Agent message envelope types |
+| `identity.rs` | Agent identity verification |
+| `auth_hooks.rs` | Authentication hook integrations |
+
+#### `behavior/` — Behavioral threat detection rules
+
+| Module | Purpose |
+|--------|---------|
+| `mod.rs` | Behavioral detection orchestration and `classify_behavior()` |
+| `exfiltration.rs` | Data exfiltration detection patterns |
+| `financial.rs` | Financial theft detection patterns |
+| `patterns.rs` | Shared pattern constants and safe host lists |
+| `privilege.rs` | Privilege escalation detection patterns |
+| `recon.rs` | Reconnaissance detection patterns |
+| `social.rs` | Social engineering detection patterns |
+| `tamper.rs` | Tampering detection patterns |
+| `tests.rs` | Behavioral detection test suite |
+
+#### `config/` — Configuration loading and management
+
+| Module | Purpose |
+|--------|---------|
+| `mod.rs` | TOML config deserialization (`Config` struct with all sections) |
+| `merge.rs` | TOML config merge engine with `_add`/`_remove` list semantics for config.d/ overlays |
+| `cloud.rs` | Cloud provider configuration |
+| `openclaw.rs` | OpenClaw-specific configuration |
+| `export.rs` | Configuration export utilities |
+
+#### `core/` — Core infrastructure and runtime
+
+| Module | Purpose |
+|--------|---------|
+| `mod.rs` | Core module re-exports |
 | `alerts.rs` | `Alert`, `Severity`, `AlertStore` ring buffer types |
 | `aggregator.rs` | Deduplication (fuzzy shape matching), per-source rate limiting |
-| `config.rs` | TOML config deserialization (`Config` struct with all sections) |
-| `config_merge.rs` | TOML config merge engine with `_add`/`_remove` list semantics for config.d/ overlays |
 | `admin.rs` | Admin key generation (Argon2), verification, Unix socket for authenticated commands |
 | `audit_chain.rs` | Hash-linked integrity log (SHA-256 chain, tamper-evident) |
-| `auditd.rs` | Audit log parser (SYSCALL/EXECVE/AVC records), aarch64 syscall table, user filtering |
-| `behavior.rs` | Hardcoded behavioral detection rules (~270 patterns across 6 threat categories) |
-| `cognitive.rs` | Cognitive file protection — SHA-256 baselines for identity files (SOUL.md, etc.) |
-| `barnacle.rs` | Pattern engine loading 4 JSON databases (injection, dangerous commands, privacy, supply chain) |
-| `sentinel.rs` | Real-time file watching via `notify` (inotify), shadow copies, quarantine, content scanning |
-| `scanner.rs` | 30+ periodic security scans (firewall, auditd, SUID, packages, docker, NTP, etc.) |
+| `app_state.rs` | Shared application state |
+| `orchestrator.rs` | Task orchestration and lifecycle management |
+| `response.rs` | Automated response actions |
+| `readiness.rs` | Service readiness checks |
+| `risk_latch.rs` | Risk level latch (monotonic escalation) |
+| `update.rs` | Self-updater (GitHub releases, SHA-256 + Ed25519 signature verification, chattr dance) |
+| `util.rs` | Shared utility functions |
+
+#### `detect/` — Detection engines and analysis
+
+| Module | Purpose |
+|--------|---------|
+| `mod.rs` | Detection module orchestration |
+| `behavior_adapter.rs` | Adapter bridging behavior rules into the detection pipeline |
+| `traits.rs` | Detection engine trait definitions |
 | `policy.rs` | YAML-based policy engine for detection (distinct from clawsudo enforcement) |
-| `netpolicy.rs` | Network policy engine (allowlist/blocklist mode for outbound connections) |
-| `network.rs` | iptables log line parser, CIDR/port allowlisting |
-| `journald.rs` | Journalctl-based log sources (kernel messages for network, SSH login events) |
+| `cognitive.rs` | Cognitive file protection — SHA-256 baselines for identity files (SOUL.md, etc.) |
+| `correlator.rs` | Cross-source event correlation |
+| `forensics.rs` | Forensic analysis utilities |
+| `barnacle.rs` | Pattern engine loading 4 JSON databases (injection, dangerous commands, privacy, supply chain) |
+| `prompt_firewall.rs` | LLM prompt injection detection |
+| `detector_runner.rs` | Detection engine runner and scheduling |
+| `registry.rs` | Detection engine registry |
+
+#### `enforcement/` — OS-level sandboxing
+
+| Module | Purpose |
+|--------|---------|
+| `mod.rs` | Enforcement module orchestration |
+| `capabilities.rs` | Linux capabilities management |
+| `process_cage.rs` | Process sandboxing via namespaces/cgroups |
+| `seccomp.rs` | Seccomp BPF filter management |
+| `apparmor.rs` | AppArmor profile management |
+
+#### `interface/` — External interfaces (API, Slack, TUI client)
+
+| Module | Purpose |
+|--------|---------|
+| `api.rs` | HTTP API server (hyper, endpoints: `/api/status`, `/api/alerts`, `/api/security`, `/api/health`) |
+| `slack.rs` | Slack webhook notifier (primary + backup webhook, heartbeat) |
+| `tui_client.rs` | TUI client connection handling |
+
+#### `proxy/` — API key proxy
+
+| Module | Purpose |
+|--------|---------|
+| `mod.rs` | API key proxy with DLP scanning (virtual-to-real key mapping, SSN/credit card/AWS key detection) |
+
+#### `safe/` — Safe wrappers for system operations
+
+| Module | Purpose |
+|--------|---------|
+| `safe_cmd.rs` | Safe command execution with timeouts |
+| `safe_io.rs` | Safe I/O operations |
+| `safe_match.rs` | Safe pattern matching utilities |
+| `safe_tail.rs` | Safe file tailing |
+
+#### `scanner/` — Periodic security scanners
+
+| Module | Purpose |
+|--------|---------|
+| `mod.rs` | Scanner orchestration and `SecurityScanner::run_all_scans()` |
+| `user_accounts.rs` | User account security scans |
+| `filesystem.rs` | Filesystem security scans (SUID, world-writable, etc.) |
+| `hardening.rs` | System hardening checks |
+| `helpers.rs` | Shared scanner helper functions |
+| `network.rs` | Network security scans |
+| `process.rs` | Process health scans |
+
+#### `sentinel/` — Real-time file integrity monitoring
+
+| Module | Purpose |
+|--------|---------|
+| `mod.rs` | Real-time file watching via `notify` (inotify), shadow copies, quarantine, content scanning |
+| `intake.rs` | Sentinel event intake and processing |
+| `shadow.rs` | Shadow copy management |
+
+#### `sources/` — Monitoring data sources
+
+| Module | Purpose |
+|--------|---------|
+| `mod.rs` | Source module orchestration |
+| `traits.rs` | Source trait definitions |
+| `auditd.rs` | Audit log parser (SYSCALL/EXECVE/AVC records), aarch64 syscall table, user filtering |
 | `falco.rs` | Falco JSON log parser (eBPF-based syscall monitoring) |
 | `samhain.rs` | Samhain FIM log parser |
+| `journald.rs` | Journalctl-based log sources (kernel messages for network, SSH login events) |
+| `network.rs` | iptables log line parser, CIDR/port allowlisting |
 | `firewall.rs` | Periodic UFW status monitoring with diff-based change detection |
 | `logtamper.rs` | Audit log integrity monitor (size decrease, inode change, permissions) |
-| `slack.rs` | Slack webhook notifier (primary + backup webhook, heartbeat) |
-| `tui.rs` | Ratatui TUI dashboard (6 tabs: Alerts, Network, Falco, FIM, System, Config editor) |
-| `api.rs` | HTTP API server (hyper, endpoints: `/api/status`, `/api/alerts`, `/api/security`, `/api/health`) |
-| `proxy.rs` | API key proxy with DLP scanning (virtual→real key mapping, SSN/credit card/AWS key detection) |
-| `update.rs` | Self-updater (GitHub releases, SHA-256 + Ed25519 signature verification, chattr dance) |
-| `bin/clawsudo.rs` | Standalone sudo gatekeeper binary with YAML policy evaluation and Slack approval flow |
+| `memory_sentinel.rs` | Memory-based sentinel monitoring |
+
+#### `tui/` — Terminal UI dashboard
+
+| Module | Purpose |
+|--------|---------|
+| `mod.rs` | Ratatui TUI dashboard (6 tabs: Alerts, Network, Falco, FIM, System, Config editor) |
+| `config_editor.rs` | TUI configuration editor tab |
+
+#### `bin/` — Standalone binaries
+
+| Module | Purpose |
+|--------|---------|
+| `clawsudo.rs` | Standalone sudo gatekeeper binary with YAML policy evaluation and Slack approval flow |
+| `clawtower-ctl.rs` | ClawTower control utility |
+| `clawtower-tray.rs` | System tray integration |
 
 For detailed module internals, see `.docs/ARCHITECTURE.md` and `.docs/MONITORING-SOURCES.md`.
 
@@ -93,7 +223,7 @@ Sources `clone()` `raw_tx` and send `Alert`s. The `Aggregator` deduplicates (fuz
 
 ### Config Layering
 
-- **Config:** base `config.toml` + `config.d/*.toml` overlays (scalar replace, list `_add`/`_remove`). See `config_merge.rs`.
+- **Config:** base `config.toml` + `config.d/*.toml` overlays (scalar replace, list `_add`/`_remove`). See `config/merge.rs`.
 - **Policies:** `default.yaml` loaded first, then alphabetical `*.yaml` files merged by rule name. `enabled: false` disables a rule.
 - Updates replace base files, never touch user overrides.
 
@@ -135,7 +265,7 @@ Config file: `/etc/clawtower/config.toml`. Full reference with all fields, types
 
 **Key methods:** `Config::load(path)`, `Config::save(path)`, `Config::load_with_overrides(base_path, config_d)`
 
-All config section structs are public, `Deserialize + Serialize + Default`. Most in `config.rs`; `BarnacleDefenseConfig` in `barnacle.rs`.
+All config section structs are public, `Deserialize + Serialize + Default`. Most in `config/mod.rs`; `BarnacleDefenseConfig` in `detect/barnacle.rs`.
 
 ---
 
@@ -199,7 +329,7 @@ Do not push until steps 3 and 4 succeed. If the pentest reveals regressions, fix
 
 ### Adding a New Scanner
 
-1. Add scan function in `src/scanner.rs` returning `ScanResult`:
+1. Add scan function in the appropriate `src/scanner/` submodule (or create a new one) returning `ScanResult`:
 
 ```rust
 pub fn scan_my_check() -> ScanResult {
@@ -214,9 +344,9 @@ pub fn scan_my_check() -> ScanResult {
 
 ### Adding a New Monitoring Source
 
-1. Create `src/my_source.rs` with a `pub async fn tail_...(tx: mpsc::Sender<Alert>)` function
-2. Add `mod my_source;` in `main.rs`
-3. Spawn in `async_main()`: `tokio::spawn(async move { my_source::tail_...(raw_tx.clone()).await; });`
+1. Create `src/sources/my_source.rs` with a `pub async fn tail_...(tx: mpsc::Sender<Alert>)` function
+2. Add `pub mod my_source;` in `src/sources/mod.rs` and re-export as needed
+3. Spawn in `async_main()`: `tokio::spawn(async move { sources::my_source::tail_...(raw_tx.clone()).await; });`
 4. Optionally add config section (struct with `enabled: bool`, add to `Config`, gate spawn)
 
 See `.docs/MONITORING-SOURCES.md` for full patterns and existing source implementations.
@@ -230,15 +360,15 @@ patterns = ["*"]
 policy = "protected"  # or "watched"
 ```
 
-To add compile-time defaults, modify `SentinelConfig::default()` in `src/config.rs`.
+To add compile-time defaults, modify `SentinelConfig::default()` in `src/config/mod.rs`.
 
 ### Modifying Alert Behavior
 
-- **Dedup window**: `AggregatorConfig::default()` in `aggregator.rs`
+- **Dedup window**: `AggregatorConfig::default()` in `core/aggregator.rs`
 - **Slack threshold**: `min_slack_level` in config
-- **Behavior rule**: Add pattern to constant array in `behavior.rs`, handle in `classify_behavior()`
-- **Safe host**: Add to `SAFE_HOSTS` in `behavior.rs`
-- **Sudo allowlist**: Add to `BarnacleDefenseEngine::SUDO_ALLOWLIST` in `barnacle.rs`
+- **Behavior rule**: Add pattern to the appropriate `behavior/*.rs` submodule, handle in `classify_behavior()` in `behavior/mod.rs`
+- **Safe host**: Add to `SAFE_HOSTS` in `behavior/patterns.rs`
+- **Sudo allowlist**: Add to `BarnacleDefenseEngine::SUDO_ALLOWLIST` in `detect/barnacle.rs`
 - **Policy rule**: Create/edit YAML in `policies/` directory
 
 ### Adding a New TUI Tab
