@@ -778,6 +778,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // Requires interactive stdin ("I SAVED MY KEY" prompt)
     fn test_generate_and_show_creates_key() {
         let dir = tempfile::tempdir().unwrap();
         let hash_path = dir.path().join("admin.hash");

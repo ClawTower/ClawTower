@@ -214,7 +214,7 @@ mod tests {
         );
 
         // Verify arch-specific syscall numbers are populated
-        assert_eq!(table.kill_list.len(), 18);
+        assert_eq!(table.kill_list.len(), 23);
         assert_eq!(table.trace_list.len(), 10);
 
         // All syscall numbers should be > 0
