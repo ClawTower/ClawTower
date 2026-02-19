@@ -12,6 +12,7 @@
 
 // Directory modules
 mod agent;
+mod approval;
 mod behavior;
 mod config;
 mod core;
