@@ -10,23 +10,27 @@
 //! The architecture is a channel pipeline:
 //! Sources → raw_tx → Aggregator → alert_tx → TUI/headless + slack_tx → Slack
 
-mod core;
+// Directory modules
 mod agent;
-mod cli;
+mod behavior;
+mod config;
+mod core;
 mod detect;
 mod enforcement;
-mod behavior;
-mod compliance;
-mod config;
 mod interface;
-mod sentinel;
-mod netpolicy;
 mod proxy;
 mod safe;
 mod scanner;
+mod sentinel;
 mod sources;
 mod tui;
 
+// Flat modules (standalone, borderline cases)
+mod cli;
+mod compliance;
+mod netpolicy;
+
+// Test-only modules
 #[cfg(test)]
 mod integration_tests;
 #[cfg(test)]
