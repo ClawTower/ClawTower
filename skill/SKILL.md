@@ -190,15 +190,110 @@ Returns the full results of the last periodic security scan (30+ checks).
 sudo clawtower --scan --config /etc/clawtower/config.toml
 ```
 
-## Approval workflow
+## Permission model
 
-ClawTower supports an approval workflow for privileged operations via clawsudo.
+All privileged commands go through `clawsudo`, the sudo proxy/gatekeeper. Every command is evaluated against YAML policies in `/etc/clawtower/policies/`. There are three possible outcomes:
 
-### Check pending approvals
+### Allowed commands (immediate execution)
+
+These run immediately through sudo without waiting for approval:
+
+- **Package management:** `apt`, `apt-get`, `dpkg`
+- **Container operations:** `docker`, `docker-compose`
+- **Read-only systemctl:** `systemctl status`, `systemctl is-active`, `systemctl is-enabled`, `systemctl list-units`, `systemctl show`
+- **Log viewing:** `journalctl`
+- **Firewall queries:** `ufw`
+- **Network info:** `ip`
+- **File reads:** `cat` (read-only)
+- **File operations under safe paths:** `cp`, `mv`, `rm`, `mkdir` under `/tmp/`, `/var/tmp/`, `/home/openclaw/`
+- **Safe tee writes:** `tee` to `/tmp/`, `/var/tmp/`, `/home/openclaw/`
+
+Usage — just prefix with `clawsudo`:
+
+```bash
+clawsudo apt install curl
+clawsudo systemctl status nginx
+clawsudo journalctl -u myservice -n 50 --no-pager
+clawsudo cat /etc/nginx/nginx.conf
+```
+
+### Denied commands (always blocked)
+
+These are blocked regardless of approval. Do not attempt them:
+
+- **ClawTower tampering:** anything touching `/etc/clawtower`, `/usr/local/bin/clawtower`, `chattr`, `auditctl -D`
+- **Security service control:** `systemctl stop/restart/disable/mask clawtower`, same for `auditd`
+- **Firewall disable:** `ufw disable`, `iptables -F`, `nft flush`
+- **Destructive deletions:** `rm -rf /etc`, `rm -rf /usr`, `rm -rf /var`, `rm -rf /home`, `rm -rf /`
+- **Reverse shells:** `/dev/tcp/`, `bash -i`, `nc -e`
+- **Raw shell via sudo:** `bash`, `sh`, `zsh`
+- **Identity file tampering:** `SOUL.md`, `IDENTITY.md`, `AGENTS.md`, `USER.md`, openclaw config files
+- **Exfiltration domains:** `webhook.site`, `ngrok.io`, `requestbin.com`, etc.
+- **Dangerous file tools:** `find` (with -exec risk), `sed -i` to `/etc/` or `/var/`, `tee` to `/etc/`
+- **Privilege escalation:** `chmod +s`, `visudo`, `sudoers` writes
+- **chattr:** all `chattr` operations
+
+If a command is denied, clawsudo exits with code 77. Do not retry — the policy is enforced and the denial is logged.
+
+### Commands requiring approval (ask flow)
+
+Any command not explicitly allowed or denied enters the **approval flow**. This means a human must approve it before it executes. The approval request is sent simultaneously to all configured channels.
+
+## Requesting elevated access
+
+When you need to run a privileged command that isn't pre-allowed, use `clawsudo` and it will automatically handle the approval flow:
+
+```bash
+clawsudo systemctl restart nginx
+```
+
+If the command requires approval, clawsudo will:
+
+1. Submit an approval request to ClawTower's API
+2. ClawTower fans the request out to **all available channels simultaneously**
+3. Wait up to 5 minutes for a human to approve or deny
+4. Execute the command if approved, or exit with code 78 (timeout) if no response
+
+**Your job as the agent:** Tell the user what you need and why, then run the `clawsudo` command. If it requires approval, inform the user that you're waiting for their approval and explain which channels they can use to respond.
+
+Example message to user:
+
+> I need to restart nginx to apply the configuration changes. I've submitted `clawsudo systemctl restart nginx` — this requires your approval. You can approve it from:
+> - **Slack** — look for the approval message with Approve/Deny buttons
+> - **System tray** — a desktop notification will appear with action buttons
+> - **TUI dashboard** — if the ClawTower TUI is open, a popup will appear (press Y to approve, N to deny)
+
+### Approval channels
+
+The user can approve from whichever channel is most convenient — **the first response wins** and all other channels are notified of the decision.
+
+| Channel | How the user approves | When available |
+|---------|----------------------|----------------|
+| **Slack** | Click the Approve or Deny button on the Block Kit message | When Slack `app_token` is configured |
+| **TUI dashboard** | Press `Y` to approve or `N` to deny in the popup | When the TUI is running (`clawtower` without `--headless`) |
+| **System tray** | Click the action button on the desktop notification | When `clawtower-tray` is running |
+| **HTTP API** | `POST /api/approvals/{id}/resolve` with `{"approved": true}` | When the API is enabled |
+
+### Checking pending approvals
+
+To see what's waiting for approval:
 
 ```bash
 curl -s http://127.0.0.1:18791/api/pending | jq .
 ```
+
+### Timeout behavior
+
+If no human responds within 5 minutes, the request times out and the command is **not executed**. clawsudo exits with code 78. If this happens, tell the user the approval timed out and ask if they'd like you to retry.
+
+### Exit codes
+
+| Code | Meaning | What to tell the user |
+|------|---------|----------------------|
+| 0 | Command executed successfully | Report the result normally |
+| 1 | Command failed | Report the error from the command |
+| 77 | Denied by policy | "This command is blocked by ClawTower security policy." Do not retry. |
+| 78 | Approval timed out | "The approval request timed out after 5 minutes. Would you like me to try again?" |
 
 ## Response guidelines
 
