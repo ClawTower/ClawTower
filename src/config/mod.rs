@@ -242,6 +242,9 @@ pub struct DiscordConfig {
     /// Enable/disable Discord integration
     #[serde(default)]
     pub enabled: bool,
+    /// Discord webhook URL for alert notifications
+    #[serde(default)]
+    pub webhook_url: String,
     /// Discord bot token
     #[serde(default)]
     pub bot_token: String,
@@ -265,6 +268,7 @@ impl Default for DiscordConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            webhook_url: String::new(),
             bot_token: String::new(),
             public_key: String::new(),
             approval_channel_id: String::new(),
