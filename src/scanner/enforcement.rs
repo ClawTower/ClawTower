@@ -8,12 +8,14 @@
 
 use super::{ScanResult, ScanStatus};
 use super::helpers::run_cmd_with_sudo;
+use crate::agent::profile::AgentProfile;
 
-/// Parse `aa-status` output to check if the openclaw profile is in enforce mode.
-pub fn parse_aa_status(output: &str) -> ScanResult {
+/// Parse `aa-status` output to check if an agent's AppArmor profile is in enforce mode.
+pub fn parse_aa_status(output: &str, process_name: &str) -> ScanResult {
     let lower = output.to_lowercase();
+    let proc_lower = process_name.to_lowercase();
 
-    // Look for openclaw profile in enforce section
+    // Look for agent profile in enforce section
     let mut in_enforce = false;
     for line in output.lines() {
         let trimmed = line.trim();
@@ -25,40 +27,40 @@ pub fn parse_aa_status(output: &str) -> ScanResult {
             in_enforce = false;
             continue;
         }
-        if in_enforce && (lower.contains("openclaw") || trimmed.contains("openclaw")) {
+        if in_enforce && trimmed.to_lowercase().contains(&proc_lower) {
             return ScanResult::new("enforcement:apparmor", ScanStatus::Pass,
-                "OpenClaw AppArmor profile is in enforce mode");
+                &format!("{} AppArmor profile is in enforce mode", process_name));
         }
     }
 
-    // Simpler check: look for openclaw anywhere with enforce context
-    if lower.contains("openclaw") {
+    // Simpler check: look for the process anywhere with enforce context
+    if lower.contains(&proc_lower) {
         if lower.contains("enforce") {
             return ScanResult::new("enforcement:apparmor", ScanStatus::Pass,
-                "OpenClaw AppArmor profile detected in enforce mode");
+                &format!("{} AppArmor profile detected in enforce mode", process_name));
         }
         ScanResult::new("enforcement:apparmor", ScanStatus::Warn,
-            "OpenClaw AppArmor profile found but not in enforce mode")
+            &format!("{} AppArmor profile found but not in enforce mode", process_name))
     } else {
         ScanResult::new("enforcement:apparmor", ScanStatus::Warn,
-            "No OpenClaw AppArmor profile loaded")
+            &format!("No {} AppArmor profile loaded", process_name))
     }
 }
 
 /// Parse `/proc/<pid>/status` content for the Seccomp field.
 ///
 /// Returns Pass if Seccomp: 2 (filter mode), Warn otherwise.
-pub fn parse_proc_status_seccomp(content: &str) -> ScanResult {
+pub fn parse_proc_status_seccomp(content: &str, agent_name: &str) -> ScanResult {
     for line in content.lines() {
         if line.starts_with("Seccomp:") {
             let value = line.split_whitespace().nth(1).unwrap_or("");
             return match value {
                 "2" => ScanResult::new("enforcement:seccomp", ScanStatus::Pass,
-                    "Seccomp BPF filter active on OpenClaw process"),
+                    &format!("Seccomp BPF filter active on {} process", agent_name)),
                 "1" => ScanResult::new("enforcement:seccomp", ScanStatus::Warn,
-                    "Seccomp in strict mode (not filter) on OpenClaw process"),
+                    &format!("Seccomp in strict mode (not filter) on {} process", agent_name)),
                 "0" => ScanResult::new("enforcement:seccomp", ScanStatus::Warn,
-                    "Seccomp not active on OpenClaw process"),
+                    &format!("Seccomp not active on {} process", agent_name)),
                 _ => ScanResult::new("enforcement:seccomp", ScanStatus::Warn,
                     &format!("Unknown seccomp status: {}", value)),
             };
@@ -72,7 +74,7 @@ pub fn parse_proc_status_seccomp(content: &str) -> ScanResult {
 ///
 /// Verifies that dangerous capabilities (SYS_ADMIN=21, NET_ADMIN=12,
 /// LINUX_IMMUTABLE=9) are not present in the effective capability set.
-pub fn parse_proc_status_caps(content: &str) -> ScanResult {
+pub fn parse_proc_status_caps(content: &str, agent_name: &str) -> ScanResult {
     for line in content.lines() {
         if line.starts_with("CapEff:") {
             let hex_str = line.split_whitespace().nth(1).unwrap_or("ffffffffffffffff");
@@ -90,11 +92,11 @@ pub fn parse_proc_status_caps(content: &str) -> ScanResult {
 
             return if dangerous.is_empty() {
                 ScanResult::new("enforcement:caps", ScanStatus::Pass,
-                    &format!("OpenClaw process has no dangerous capabilities (CapEff: {})", hex_str.trim()))
+                    &format!("{} process has no dangerous capabilities (CapEff: {})", agent_name, hex_str.trim()))
             } else {
                 ScanResult::new("enforcement:caps", ScanStatus::Warn,
-                    &format!("OpenClaw process has dangerous capabilities: {} (CapEff: {})",
-                        dangerous.join(", "), hex_str.trim()))
+                    &format!("{} process has dangerous capabilities: {} (CapEff: {})",
+                        agent_name, dangerous.join(", "), hex_str.trim()))
             };
         }
     }
@@ -102,27 +104,29 @@ pub fn parse_proc_status_caps(content: &str) -> ScanResult {
         "CapEff field not found in process status")
 }
 
-/// Run all enforcement verification checks against the live OpenClaw process.
-pub fn scan_enforcement_verification() -> Vec<ScanResult> {
+/// Run all enforcement verification checks against a live agent process.
+pub fn scan_enforcement_verification(profile: &AgentProfile) -> Vec<ScanResult> {
     let mut results = Vec::new();
+    let agent_name = &profile.agent.name;
+    let process = profile.agent.effective_process_name();
 
     // 1. AppArmor profile status
     match run_cmd_with_sudo("aa-status", &[]) {
-        Ok(output) => results.push(parse_aa_status(&output)),
+        Ok(output) => results.push(parse_aa_status(&output, process)),
         Err(_) => results.push(ScanResult::new("enforcement:apparmor", ScanStatus::Pass,
             "AppArmor not available (not required)")),
     }
 
-    // Find openclaw PID
-    let pid = match super::helpers::run_cmd("pgrep", &["-x", "openclaw"]) {
+    // Find agent PID
+    let pid = match super::helpers::run_cmd("pgrep", &["-x", process]) {
         Ok(p) if !p.trim().is_empty() => {
             p.trim().lines().next().unwrap_or("").to_string()
         }
         _ => {
             results.push(ScanResult::new("enforcement:seccomp", ScanStatus::Warn,
-                "OpenClaw process not found — cannot verify enforcement"));
+                &format!("{} process not found — cannot verify enforcement", agent_name)));
             results.push(ScanResult::new("enforcement:caps", ScanStatus::Warn,
-                "OpenClaw process not found — cannot verify enforcement"));
+                &format!("{} process not found — cannot verify enforcement", agent_name)));
             return results;
         }
     };
@@ -131,8 +135,8 @@ pub fn scan_enforcement_verification() -> Vec<ScanResult> {
     let status_path = format!("/proc/{}/status", pid);
     match std::fs::read_to_string(&status_path) {
         Ok(content) => {
-            results.push(parse_proc_status_seccomp(&content));
-            results.push(parse_proc_status_caps(&content));
+            results.push(parse_proc_status_seccomp(&content, agent_name));
+            results.push(parse_proc_status_caps(&content, agent_name));
         }
         Err(e) => {
             results.push(ScanResult::new("enforcement:seccomp", ScanStatus::Warn,
@@ -154,20 +158,20 @@ mod tests {
     #[test]
     fn test_aa_status_enforce_mode() {
         let output = "apparmor module is loaded.\n18 profiles are loaded.\n18 profiles are in enforce mode.\n   /usr/bin/openclaw\n   /usr/sbin/ntpd\n0 profiles are in complain mode.\n";
-        let result = parse_aa_status(output);
+        let result = parse_aa_status(output, "openclaw");
         assert_eq!(result.status, ScanStatus::Pass);
     }
 
     #[test]
     fn test_aa_status_no_openclaw_profile() {
         let output = "apparmor module is loaded.\n5 profiles are loaded.\n5 profiles are in enforce mode.\n   /usr/sbin/ntpd\n0 profiles are in complain mode.\n";
-        let result = parse_aa_status(output);
+        let result = parse_aa_status(output, "openclaw");
         assert_eq!(result.status, ScanStatus::Warn);
     }
 
     #[test]
     fn test_aa_status_empty() {
-        let result = parse_aa_status("");
+        let result = parse_aa_status("", "openclaw");
         assert_eq!(result.status, ScanStatus::Warn);
     }
 
@@ -176,21 +180,21 @@ mod tests {
     #[test]
     fn test_seccomp_filter_active() {
         let content = "Name:\topenclaw\nState:\tS (sleeping)\nSeccomp:\t2\nSeccomp_filters:\t1\n";
-        let result = parse_proc_status_seccomp(content);
+        let result = parse_proc_status_seccomp(content, "OpenClaw");
         assert_eq!(result.status, ScanStatus::Pass);
     }
 
     #[test]
     fn test_seccomp_disabled() {
         let content = "Name:\topenclaw\nSeccomp:\t0\n";
-        let result = parse_proc_status_seccomp(content);
+        let result = parse_proc_status_seccomp(content, "OpenClaw");
         assert_eq!(result.status, ScanStatus::Warn);
     }
 
     #[test]
     fn test_seccomp_strict_mode() {
         let content = "Name:\topenclaw\nSeccomp:\t1\n";
-        let result = parse_proc_status_seccomp(content);
+        let result = parse_proc_status_seccomp(content, "OpenClaw");
         assert_eq!(result.status, ScanStatus::Warn);
         assert!(result.details.contains("strict"));
     }
@@ -198,7 +202,7 @@ mod tests {
     #[test]
     fn test_seccomp_missing_field() {
         let content = "Name:\topenclaw\nState:\tR (running)\n";
-        let result = parse_proc_status_seccomp(content);
+        let result = parse_proc_status_seccomp(content, "OpenClaw");
         assert_eq!(result.status, ScanStatus::Warn);
     }
 
@@ -208,7 +212,7 @@ mod tests {
     fn test_caps_no_dangerous() {
         // CapEff with no dangerous bits set (just CAP_NET_BIND_SERVICE=10)
         let content = "Name:\topenclaw\nCapEff:\t0000000000000400\n";
-        let result = parse_proc_status_caps(content);
+        let result = parse_proc_status_caps(content, "OpenClaw");
         assert_eq!(result.status, ScanStatus::Pass);
     }
 
@@ -216,7 +220,7 @@ mod tests {
     fn test_caps_sys_admin_present() {
         // CAP_SYS_ADMIN = bit 21 = 0x200000
         let content = "Name:\topenclaw\nCapEff:\t0000000000200000\n";
-        let result = parse_proc_status_caps(content);
+        let result = parse_proc_status_caps(content, "OpenClaw");
         assert_eq!(result.status, ScanStatus::Warn);
         assert!(result.details.contains("SYS_ADMIN"));
     }
@@ -226,7 +230,7 @@ mod tests {
         // CAP_SYS_ADMIN(21) + CAP_NET_ADMIN(12) + CAP_LINUX_IMMUTABLE(9)
         // = 0x200000 + 0x1000 + 0x200 = 0x201200
         let content = "Name:\topenclaw\nCapEff:\t0000000000201200\n";
-        let result = parse_proc_status_caps(content);
+        let result = parse_proc_status_caps(content, "OpenClaw");
         assert_eq!(result.status, ScanStatus::Warn);
         assert!(result.details.contains("SYS_ADMIN"));
         assert!(result.details.contains("NET_ADMIN"));
@@ -237,7 +241,7 @@ mod tests {
     fn test_caps_all_capabilities() {
         // Full capabilities = all bits set
         let content = "Name:\topenclaw\nCapEff:\tffffffffffffffff\n";
-        let result = parse_proc_status_caps(content);
+        let result = parse_proc_status_caps(content, "OpenClaw");
         assert_eq!(result.status, ScanStatus::Warn);
         assert!(result.details.contains("SYS_ADMIN"));
         assert!(result.details.contains("SYS_PTRACE"));
@@ -246,14 +250,14 @@ mod tests {
     #[test]
     fn test_caps_missing_field() {
         let content = "Name:\topenclaw\nState:\tS\n";
-        let result = parse_proc_status_caps(content);
+        let result = parse_proc_status_caps(content, "OpenClaw");
         assert_eq!(result.status, ScanStatus::Warn);
     }
 
     #[test]
     fn test_caps_zero() {
         let content = "Name:\topenclaw\nCapEff:\t0000000000000000\n";
-        let result = parse_proc_status_caps(content);
+        let result = parse_proc_status_caps(content, "OpenClaw");
         assert_eq!(result.status, ScanStatus::Pass);
     }
 }

@@ -7,6 +7,7 @@
 
 use super::{ScanResult, ScanStatus};
 use super::helpers::{run_cmd, detect_agent_username, detect_agent_home, compute_file_sha256};
+use crate::agent::profile::AgentProfile;
 
 /// Audit user and system crontabs for suspicious entries (wget, curl, nc, base64, etc.).
 pub fn scan_crontab_audit() -> ScanResult {
@@ -96,9 +97,14 @@ pub fn scan_failed_login_attempts() -> ScanResult {
 }
 
 /// Audit user accounts: non-root UID 0 users, passwordless shell accounts, and excessive sudo group members.
-pub fn scan_user_account_audit() -> ScanResult {
+pub fn scan_user_account_audit_with_profiles(profiles: &[AgentProfile]) -> ScanResult {
     let mut issues = Vec::new();
-    let watched_user = detect_agent_username();
+    // Collect all agent usernames from profiles, falling back to detect_agent_username()
+    let watched_users: Vec<String> = if profiles.is_empty() {
+        vec![detect_agent_username()]
+    } else {
+        profiles.iter().map(|p| p.agent.user.clone()).collect()
+    };
 
     // Check for users with UID 0 (root privileges)
     if let Ok(passwd_content) = std::fs::read_to_string("/etc/passwd") {
@@ -169,7 +175,7 @@ pub fn scan_user_account_audit() -> ScanResult {
         }
     }
 
-    // Check if watched user is in dangerous groups (docker/lxd = instant root)
+    // Check if any watched agent user is in dangerous groups (docker/lxd = instant root)
     if let Ok(group_content) = std::fs::read_to_string("/etc/group") {
         const DANGEROUS_GROUPS: &[&str] = &["docker", "lxd", "lxc", "disk"];
         for line in group_content.lines() {
@@ -178,8 +184,10 @@ pub fn scan_user_account_audit() -> ScanResult {
                 let group_name = fields[0];
                 if DANGEROUS_GROUPS.contains(&group_name) {
                     let members: Vec<&str> = fields[3].split(',').filter(|s| !s.is_empty()).collect();
-                    if members.iter().any(|m| *m == watched_user) {
-                        issues.push(format!("{} in dangerous group '{}' (privilege escalation vector)", watched_user, group_name));
+                    for wu in &watched_users {
+                        if members.iter().any(|m| *m == wu.as_str()) {
+                            issues.push(format!("{} in dangerous group '{}' (privilege escalation vector)", wu, group_name));
+                        }
                     }
                 }
             }
@@ -199,19 +207,36 @@ pub fn scan_user_account_audit() -> ScanResult {
     }
 }
 
-/// Scan user-level persistence mechanisms for the openclaw user.
+/// Audit user accounts (backwards-compatible wrapper using detect_agent_username fallback).
+pub fn scan_user_account_audit() -> ScanResult {
+    scan_user_account_audit_with_profiles(&[])
+}
+
+/// Scan user-level persistence mechanisms for monitored agent users.
 ///
 /// Checks crontab, systemd user units, shell rc file integrity, autostart
 /// desktop files, git hooks, SSH rc/environment, Python usercustomize,
 /// npmrc install scripts, and dangerous environment variables.
 pub fn scan_user_persistence() -> Vec<ScanResult> {
-    scan_user_persistence_inner(None)
+    scan_user_persistence_inner(None, None)
 }
 
-/// Inner implementation with optional crontab override for testing.
-fn scan_user_persistence_inner(crontab_override: Option<&str>) -> Vec<ScanResult> {
+/// Scan user-level persistence for specific agent profiles.
+pub fn scan_user_persistence_with_profiles(profiles: &[AgentProfile]) -> Vec<ScanResult> {
     let mut results = Vec::new();
-    let home = detect_agent_home();
+    if profiles.is_empty() {
+        return scan_user_persistence_inner(None, None);
+    }
+    for profile in profiles {
+        results.extend(scan_user_persistence_inner(None, Some(&profile.agent.home_dir)));
+    }
+    results
+}
+
+/// Inner implementation with optional crontab override and home dir for testing.
+fn scan_user_persistence_inner(crontab_override: Option<&str>, home_override: Option<&str>) -> Vec<ScanResult> {
+    let mut results = Vec::new();
+    let home = home_override.map(String::from).unwrap_or_else(detect_agent_home);
 
     // 1. Crontab entries
     let crontab_output = match crontab_override {
@@ -437,7 +462,7 @@ mod tests {
 
     #[test]
     fn test_scan_user_persistence_crontab_entries() {
-        let results = scan_user_persistence_inner(Some("* * * * * /tmp/evil.sh\n"));
+        let results = scan_user_persistence_inner(Some("* * * * * /tmp/evil.sh\n"), None);
         let crontab_result = &results[0];
         assert_eq!(crontab_result.status, ScanStatus::Fail);
         assert!(crontab_result.details.contains("crontab"));
@@ -445,7 +470,7 @@ mod tests {
 
     #[test]
     fn test_scan_user_persistence_crontab_empty() {
-        let results = scan_user_persistence_inner(Some("# comment only\n\n"));
+        let results = scan_user_persistence_inner(Some("# comment only\n\n"), None);
         let crontab_result = &results[0];
         assert_eq!(crontab_result.status, ScanStatus::Pass);
     }

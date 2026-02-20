@@ -9,7 +9,8 @@
 use std::process::Command;
 
 use super::{ScanResult, ScanStatus};
-use super::helpers::{run_cmd, run_cmd_with_sudo, detect_agent_home};
+use super::helpers::{run_cmd, run_cmd_with_sudo};
+use crate::agent::profile::AgentProfile;
 use super::remediate;
 
 /// Check for promiscuous-mode interfaces, unusual tunnel/tap devices, IP forwarding, and VPN routes.
@@ -448,17 +449,21 @@ pub fn scan_control_ui_security(config: &str) -> Vec<ScanResult> {
     results
 }
 
-/// Check whether the OpenClaw process is running inside a container/namespace.
+/// Check whether an agent process is running inside a container/namespace.
 ///
 /// Detects Docker, LXC, and general PID namespace isolation by inspecting
 /// /proc/<pid>/cgroup and /proc/1/cgroup. Running bare-metal is a WARN.
-pub fn scan_openclaw_container_isolation() -> ScanResult {
-    // Find openclaw PID
-    let pid = match run_cmd("pgrep", &["-x", "openclaw"]) {
+pub fn scan_agent_container_isolation(profile: &AgentProfile) -> ScanResult {
+    let agent_name = &profile.agent.name;
+    let process = profile.agent.effective_process_name();
+    let cat = format!("agent:{}:isolation", profile.agent.user);
+
+    // Find agent PID
+    let pid = match run_cmd("pgrep", &["-x", process]) {
         Ok(p) if !p.trim().is_empty() => p.trim().lines().next().unwrap_or("").to_string(),
         _ => {
-            return ScanResult::new("openclaw:isolation", ScanStatus::Warn,
-                "OpenClaw process not found — cannot check container isolation");
+            return ScanResult::new(&cat, ScanStatus::Warn,
+                &format!("{} process not found — cannot check container isolation", agent_name));
         }
     };
 
@@ -476,29 +481,33 @@ pub fn scan_openclaw_container_isolation() -> ScanResult {
     let ns_isolated = pid_ns_self != pid_ns_init && pid_ns_self.is_some();
 
     if in_docker || in_podman {
-        ScanResult::new("openclaw:isolation", ScanStatus::Pass,
-            "OpenClaw running inside container (Docker/Podman)")
+        ScanResult::new(&cat, ScanStatus::Pass,
+            &format!("{} running inside container (Docker/Podman)", agent_name))
     } else if in_lxc {
-        ScanResult::new("openclaw:isolation", ScanStatus::Pass,
-            "OpenClaw running inside LXC container")
+        ScanResult::new(&cat, ScanStatus::Pass,
+            &format!("{} running inside LXC container", agent_name))
     } else if ns_isolated {
-        ScanResult::new("openclaw:isolation", ScanStatus::Pass,
-            "OpenClaw running in isolated PID namespace")
+        ScanResult::new(&cat, ScanStatus::Pass,
+            &format!("{} running in isolated PID namespace", agent_name))
     } else {
-        ScanResult::new("openclaw:isolation", ScanStatus::Warn,
-            "OpenClaw running on bare metal — consider containerizing for isolation")
+        ScanResult::new(&cat, ScanStatus::Warn,
+            &format!("{} running on bare metal — consider containerizing for isolation", agent_name))
     }
 }
 
-/// Check whether the OpenClaw process is running as root (UID 0).
+/// Check whether an agent process is running as root (UID 0).
 ///
 /// Running as root gives the agent full system access, violating least-privilege.
-pub fn scan_openclaw_running_as_root() -> ScanResult {
-    let pid = match run_cmd("pgrep", &["-x", "openclaw"]) {
+pub fn scan_agent_running_as_root(profile: &AgentProfile) -> ScanResult {
+    let agent_name = &profile.agent.name;
+    let process = profile.agent.effective_process_name();
+    let cat = format!("agent:{}:run_as_root", profile.agent.user);
+
+    let pid = match run_cmd("pgrep", &["-x", process]) {
         Ok(p) if !p.trim().is_empty() => p.trim().lines().next().unwrap_or("").to_string(),
         _ => {
-            return ScanResult::new("openclaw:run_as_root", ScanStatus::Warn,
-                "OpenClaw process not found — cannot check running UID");
+            return ScanResult::new(&cat, ScanStatus::Warn,
+                &format!("{} process not found — cannot check running UID", agent_name));
         }
     };
 
@@ -507,7 +516,7 @@ pub fn scan_openclaw_running_as_root() -> ScanResult {
     let status = match std::fs::read_to_string(&status_path) {
         Ok(s) => s,
         Err(_) => {
-            return ScanResult::new("openclaw:run_as_root", ScanStatus::Warn,
+            return ScanResult::new(&cat, ScanStatus::Warn,
                 &format!("Cannot read {} — permission denied or process exited", status_path));
         }
     };
@@ -519,24 +528,24 @@ pub fn scan_openclaw_running_as_root() -> ScanResult {
         // fields[1] = real UID, fields[2] = effective UID
         let effective_uid = fields.get(2).unwrap_or(&"");
         if *effective_uid == "0" {
-            ScanResult::new("openclaw:run_as_root", ScanStatus::Fail,
-                "OpenClaw running as root (UID 0) — use a dedicated non-admin user")
+            ScanResult::new(&cat, ScanStatus::Fail,
+                &format!("{} running as root (UID 0) — use a dedicated non-admin user", agent_name))
         } else {
-            ScanResult::new("openclaw:run_as_root", ScanStatus::Pass,
-                &format!("OpenClaw running as UID {} (non-root)", effective_uid))
+            ScanResult::new(&cat, ScanStatus::Pass,
+                &format!("{} running as UID {} (non-root)", agent_name, effective_uid))
         }
     } else {
-        ScanResult::new("openclaw:run_as_root", ScanStatus::Warn,
-            "Could not determine OpenClaw UID from /proc status")
+        ScanResult::new(&cat, ScanStatus::Warn,
+            &format!("Could not determine {} UID from /proc status", agent_name))
     }
 }
 
-/// Scan OpenClaw config files for hardcoded API keys / secrets.
+/// Scan agent config files for hardcoded API keys / secrets.
 ///
 /// Keys should be loaded via environment variables at runtime, never stored
 /// in config files where they can be leaked in logs, backups, or version control.
-pub fn scan_openclaw_hardcoded_secrets() -> ScanResult {
-    let state_dir = format!("{}/.openclaw", detect_agent_home());
+pub fn scan_agent_hardcoded_secrets(profile: &AgentProfile) -> ScanResult {
+    let state_dir = format!("{}/.openclaw", profile.agent.home_dir);
     let config_paths = [
         format!("{}/openclaw.json", state_dir),
         format!("{}/agents/main/agent/gateway.yaml", state_dir),
@@ -611,66 +620,73 @@ pub fn scan_openclaw_hardcoded_secrets() -> ScanResult {
             found.join(", ")))
 }
 
-/// Check whether the installed OpenClaw version is current.
+/// Check whether the installed agent binary version is current.
 ///
-/// Compares `openclaw --version` output against known latest or checks
+/// Compares `<process> --version` output against known latest or checks
 /// if the binary was last modified more than 30 days ago as a staleness proxy.
-pub fn scan_openclaw_version_freshness() -> ScanResult {
+pub fn scan_agent_version_freshness(profile: &AgentProfile) -> ScanResult {
+    let process = profile.agent.effective_process_name();
+    let agent_name = &profile.agent.name;
+    let cat = format!("agent:{}:version", profile.agent.user);
+
     // Try to get the installed version
-    let version_output = match run_cmd("openclaw", &["--version"]) {
+    let version_output = match run_cmd(process, &["--version"]) {
         Ok(v) => v.trim().to_string(),
         Err(_) => {
             // Fallback: check binary modification time
-            let binary_paths = ["/usr/local/bin/openclaw", "/usr/bin/openclaw"];
-            let binary_path = binary_paths.iter().find(|p| std::path::Path::new(p).exists());
+            let binary_paths = [
+                format!("/usr/local/bin/{}", process),
+                format!("/usr/bin/{}", process),
+            ];
+            let binary_path = binary_paths.iter().find(|p| std::path::Path::new(p.as_str()).exists());
 
             return if let Some(path) = binary_path {
-                match std::fs::metadata(path) {
+                match std::fs::metadata(path.as_str()) {
                     Ok(meta) => {
                         if let Ok(modified) = meta.modified() {
                             let age = modified.elapsed().unwrap_or_default();
                             let days = age.as_secs() / 86400;
                             if days > 90 {
-                                ScanResult::new("openclaw:version", ScanStatus::Warn,
-                                    &format!("OpenClaw binary {} days old — check for updates", days))
+                                ScanResult::new(&cat, ScanStatus::Warn,
+                                    &format!("{} binary {} days old — check for updates", agent_name, days))
                             } else {
-                                ScanResult::new("openclaw:version", ScanStatus::Pass,
-                                    &format!("OpenClaw binary modified {} days ago", days))
+                                ScanResult::new(&cat, ScanStatus::Pass,
+                                    &format!("{} binary modified {} days ago", agent_name, days))
                             }
                         } else {
-                            ScanResult::new("openclaw:version", ScanStatus::Warn,
-                                "Cannot determine OpenClaw binary age")
+                            ScanResult::new(&cat, ScanStatus::Warn,
+                                &format!("Cannot determine {} binary age", agent_name))
                         }
                     }
-                    Err(_) => ScanResult::new("openclaw:version", ScanStatus::Warn,
-                        "Cannot read OpenClaw binary metadata"),
+                    Err(_) => ScanResult::new(&cat, ScanStatus::Warn,
+                        &format!("Cannot read {} binary metadata", agent_name)),
                 }
             } else {
-                ScanResult::new("openclaw:version", ScanStatus::Warn,
-                    "OpenClaw binary not found — cannot check version freshness")
+                ScanResult::new(&cat, ScanStatus::Warn,
+                    &format!("{} binary not found — cannot check version freshness", agent_name))
             };
         }
     };
 
-    // Check if there's an update available via openclaw's own mechanism
-    match run_cmd("openclaw", &["update", "--check"]) {
+    // Check if there's an update available via the agent's own mechanism
+    match run_cmd(process, &["update", "--check"]) {
         Ok(output) => {
             let up_to_date = output.contains("up to date")
                 || output.contains("already on the latest")
                 || output.contains("no update");
             if up_to_date {
-                ScanResult::new("openclaw:version", ScanStatus::Pass,
-                    &format!("OpenClaw {} — up to date", version_output))
+                ScanResult::new(&cat, ScanStatus::Pass,
+                    &format!("{} {} — up to date", agent_name, version_output))
             } else {
-                ScanResult::new("openclaw:version", ScanStatus::Warn,
-                    &format!("OpenClaw {} — update available: {}",
-                        version_output, output.trim().chars().take(100).collect::<String>()))
+                ScanResult::new(&cat, ScanStatus::Warn,
+                    &format!("{} {} — update available: {}",
+                        agent_name, version_output, output.trim().chars().take(100).collect::<String>()))
             }
         }
         Err(_) => {
             // update --check not available, just report the version
-            ScanResult::new("openclaw:version", ScanStatus::Pass,
-                &format!("OpenClaw {} installed (update check unavailable)", version_output))
+            ScanResult::new(&cat, ScanStatus::Pass,
+                &format!("{} {} installed (update check unavailable)", agent_name, version_output))
         }
     }
 }
@@ -680,7 +696,7 @@ pub fn scan_openclaw_version_freshness() -> ScanResult {
 /// Infostealers read credential files without modifying them, so sentinel (inotify)
 /// can't detect the access. Auditd `-p r` rules are the only kernel-level defense
 /// against silent reads. This scanner confirms those rules are actually loaded.
-pub fn scan_openclaw_credential_audit() -> ScanResult {
+pub fn scan_agent_credential_audit() -> ScanResult {
     // Critical files that must have auditd read-watch rules
     let required_watches: &[&str] = &[
         "device.json",
@@ -714,9 +730,9 @@ pub fn scan_openclaw_credential_audit() -> ScanResult {
     }
 }
 
-pub fn scan_openclaw_security() -> Vec<ScanResult> {
+pub fn scan_agent_security(profile: &AgentProfile) -> Vec<ScanResult> {
     let mut results = Vec::new();
-    let state_dir = format!("{}/.openclaw", detect_agent_home());
+    let state_dir = format!("{}/.openclaw", profile.agent.home_dir);
 
     // Check OpenClaw gateway config (JSON format in openclaw.json)
     let config_paths = [
@@ -1134,29 +1150,43 @@ mod tests {
         assert_eq!(results[0].status, ScanStatus::Pass);
     }
 
-    #[test]
-    fn test_openclaw_container_isolation_no_process() {
-        let result = scan_openclaw_container_isolation();
-        assert!(result.status == ScanStatus::Warn || result.status == ScanStatus::Pass);
-        assert!(result.category == "openclaw:isolation");
+    fn test_profile() -> AgentProfile {
+        toml::from_str(r#"
+[agent]
+name = "OpenClaw"
+user = "openclaw"
+process_name = "openclaw"
+home_dir = "/home/openclaw"
+workspace_dir = "/home/openclaw/.openclaw/workspace"
+"#).unwrap()
     }
 
     #[test]
-    fn test_openclaw_running_as_root_no_process() {
-        let result = scan_openclaw_running_as_root();
+    fn test_agent_container_isolation_no_process() {
+        let profile = test_profile();
+        let result = scan_agent_container_isolation(&profile);
+        assert!(result.status == ScanStatus::Warn || result.status == ScanStatus::Pass);
+        assert!(result.category.contains("isolation"));
+    }
+
+    #[test]
+    fn test_agent_running_as_root_no_process() {
+        let profile = test_profile();
+        let result = scan_agent_running_as_root(&profile);
         assert!(result.status == ScanStatus::Warn || result.status == ScanStatus::Pass
             || result.status == ScanStatus::Fail);
-        assert!(result.category == "openclaw:run_as_root");
+        assert!(result.category.contains("run_as_root"));
     }
 
     #[test]
-    fn test_openclaw_hardcoded_secrets_no_config() {
-        let result = scan_openclaw_hardcoded_secrets();
-        assert!(result.category == "openclaw:hardcoded_secrets");
+    fn test_agent_hardcoded_secrets_no_config() {
+        let profile = test_profile();
+        let result = scan_agent_hardcoded_secrets(&profile);
+        assert!(result.category.contains("hardcoded_secrets"));
     }
 
     #[test]
-    fn test_openclaw_hardcoded_secrets_detection() {
+    fn test_agent_hardcoded_secrets_detection() {
         let config_with_key = r#"{"apiKey": "sk-ant-api03-realkey1234567890abcdef1234567890"}"#;
         let has_match = ["sk-ant-"].iter().any(|prefix| {
             if let Some(pos) = config_with_key.find(prefix) {
@@ -1190,9 +1220,10 @@ mod tests {
     }
 
     #[test]
-    fn test_openclaw_version_freshness_no_binary() {
-        let result = scan_openclaw_version_freshness();
-        assert!(result.category == "openclaw:version");
+    fn test_agent_version_freshness_no_binary() {
+        let profile = test_profile();
+        let result = scan_agent_version_freshness(&profile);
+        assert!(result.category.contains("version"));
     }
 
     // ── Avahi service file tests ───────────────────────────────────────

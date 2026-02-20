@@ -36,6 +36,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{sleep, Duration};
 
+use crate::agent::profile::AgentProfile;
 use crate::core::alerts::{Alert, Severity};
 use crate::detect::cognitive::scan_cognitive_integrity;
 
@@ -54,9 +55,9 @@ use hardening::{
 };
 use network::{
     scan_network_interfaces, scan_listening_services, scan_dns_resolver,
-    scan_ntp_sync, scan_openclaw_security, scan_openclaw_container_isolation,
-    scan_openclaw_running_as_root, scan_openclaw_hardcoded_secrets,
-    scan_openclaw_version_freshness, scan_openclaw_credential_audit,
+    scan_ntp_sync, scan_agent_security, scan_agent_container_isolation,
+    scan_agent_running_as_root, scan_agent_hardcoded_secrets,
+    scan_agent_version_freshness, scan_agent_credential_audit,
     run_openclaw_audit, scan_mdns_leaks, scan_extensions_dir,
     scan_control_ui_security,
 };
@@ -152,7 +153,7 @@ impl SecurityScanner {
     /// Docker, password policy, open FDs, DNS, NTP, failed logins, zombie processes,
     /// swap/tmpfs, environment variables, packages, core dumps, network interfaces,
     /// systemd hardening, user accounts, cognitive integrity, and OpenClaw-specific checks.
-    pub fn run_all_scans_with_config(openclaw_config: &crate::config::OpenClawConfig) -> Vec<ScanResult> {
+    pub fn run_all_scans_with_config(openclaw_config: &crate::config::OpenClawConfig, profiles: &[AgentProfile]) -> Vec<ScanResult> {
         let agent_home = helpers::detect_agent_home();
         let workspace_path = format!("{}/.openclaw/workspace", agent_home);
         let mut results = vec![
@@ -192,8 +193,18 @@ impl SecurityScanner {
         // Node.js version check
         results.push(scan_nodejs_version());
 
-        // Enforcement verification (AppArmor, seccomp, capabilities)
-        results.extend(enforcement::scan_enforcement_verification());
+        // Enforcement verification (AppArmor, seccomp, capabilities) — per-agent
+        for profile in profiles {
+            results.extend(enforcement::scan_enforcement_verification(profile));
+        }
+        // Fallback if no profiles loaded
+        if profiles.is_empty() {
+            let fallback: AgentProfile = toml::from_str(&format!(
+                "[agent]\nname = \"OpenClaw\"\nuser = \"{}\"\nhome_dir = \"{}\"\nworkspace_dir = \"{}\"",
+                helpers::detect_agent_username(), agent_home, workspace_path
+            )).unwrap();
+            results.extend(enforcement::scan_enforcement_verification(&fallback));
+        }
 
         // Shadow/quarantine directory permission verification
         results.push(scan_shadow_quarantine_permissions());
@@ -201,8 +212,12 @@ impl SecurityScanner {
         // Sudoers risk analysis
         results.push(scan_sudoers_risk());
 
-        // User persistence mechanisms
-        results.extend(scan_user_persistence());
+        // User persistence mechanisms — per-agent if profiles available
+        if profiles.is_empty() {
+            results.extend(scan_user_persistence());
+        } else {
+            results.extend(user_accounts::scan_user_persistence_with_profiles(profiles));
+        }
 
         // Cognitive file integrity (returns Vec)
         // Load Barnacle engine for cognitive content scanning
@@ -214,13 +229,28 @@ impl SecurityScanner {
             std::path::Path::new("/etc/clawtower/cognitive-baselines.sha256"),
             barnacle_engine.as_ref(),
         ));
-        // OpenClaw-specific security checks
-        results.extend(scan_openclaw_security());
-        results.push(scan_openclaw_container_isolation());
-        results.push(scan_openclaw_running_as_root());
-        results.push(scan_openclaw_hardcoded_secrets());
-        results.push(scan_openclaw_version_freshness());
-        results.push(scan_openclaw_credential_audit());
+        // Agent-specific security checks — run per-profile
+        for profile in profiles {
+            results.extend(scan_agent_security(profile));
+            results.push(scan_agent_container_isolation(profile));
+            results.push(scan_agent_running_as_root(profile));
+            results.push(scan_agent_hardcoded_secrets(profile));
+            results.push(scan_agent_version_freshness(profile));
+        }
+        // Credential audit is not agent-specific (checks auditd rules globally)
+        results.push(scan_agent_credential_audit());
+        // Fallback if no profiles loaded — create a default profile from env/config
+        if profiles.is_empty() {
+            let fallback: AgentProfile = toml::from_str(&format!(
+                "[agent]\nname = \"OpenClaw\"\nuser = \"{}\"\nhome_dir = \"{}\"\nworkspace_dir = \"{}\"",
+                helpers::detect_agent_username(), agent_home, workspace_path
+            )).unwrap();
+            results.extend(scan_agent_security(&fallback));
+            results.push(scan_agent_container_isolation(&fallback));
+            results.push(scan_agent_running_as_root(&fallback));
+            results.push(scan_agent_hardcoded_secrets(&fallback));
+            results.push(scan_agent_version_freshness(&fallback));
+        }
 
         // OpenClaw security integration (config-driven)
         if openclaw_config.enabled {
@@ -262,9 +292,9 @@ impl SecurityScanner {
         results
     }
 
-    /// Execute all security checks with default OpenClaw config.
+    /// Execute all security checks with default OpenClaw config and no agent profiles.
     pub fn run_all_scans() -> Vec<ScanResult> {
-        Self::run_all_scans_with_config(&crate::config::OpenClawConfig::default())
+        Self::run_all_scans_with_config(&crate::config::OpenClawConfig::default(), &[])
     }
 }
 
@@ -297,6 +327,7 @@ pub async fn run_periodic_scans(
     scan_store: SharedScanResults,
     openclaw_config: crate::config::OpenClawConfig,
     dedup_interval_secs: u64,
+    profiles: Vec<AgentProfile>,
 ) {
     use std::collections::HashMap;
     use std::time::Instant;
@@ -308,7 +339,8 @@ pub async fn run_periodic_scans(
     loop {
         // Run scans in blocking task since they use Command
         let oc_cfg = openclaw_config.clone();
-        let results = tokio::task::spawn_blocking(move || SecurityScanner::run_all_scans_with_config(&oc_cfg))
+        let profs = profiles.clone();
+        let results = tokio::task::spawn_blocking(move || SecurityScanner::run_all_scans_with_config(&oc_cfg, &profs))
             .await
             .unwrap_or_default();
 

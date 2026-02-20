@@ -25,6 +25,7 @@ use crate::notify::slack::SlackChannel;
 use crate::notify::tui::TuiChannel;
 use crate::notify::tray::TrayChannel;
 use crate::notify::discord::DiscordChannel;
+use crate::agent::profile;
 use crate::{policy, proxy, scanner, sentinel, tui};
 use crate::detect::barnacle;
 use crate::sources::{auditd, falco, firewall, journald, logtamper, memory_sentinel, network, samhain};
@@ -180,6 +181,22 @@ pub async fn run_watchdog(state: AppState, receivers: AlertReceivers) -> Result<
         }
     }
 
+    // Load agent profiles from agents.d/
+    let agents_d = Path::new("/etc/clawtower/agents.d");
+    let agent_profiles = match profile::load_profiles(agents_d) {
+        Ok(p) => {
+            if !p.is_empty() {
+                eprintln!("[orchestrator] Loaded {} agent profile(s): {}",
+                    p.len(), p.iter().map(|pr| pr.agent.name.as_str()).collect::<Vec<_>>().join(", "));
+            }
+            p
+        }
+        Err(e) => {
+            eprintln!("[orchestrator] Warning: failed to load agent profiles from {}: {}", agents_d.display(), e);
+            Vec::new()
+        }
+    };
+
     // Periodic security scanner
     {
         let tx = state.raw_tx.clone();
@@ -187,8 +204,9 @@ pub async fn run_watchdog(state: AppState, receivers: AlertReceivers) -> Result<
         let interval = state.config.scans.interval;
         let oc_cfg = state.config.openclaw.clone();
         let dedup = state.config.scans.dedup_interval_secs;
+        let profiles = agent_profiles.clone();
         tokio::spawn(async move {
-            scanner::run_periodic_scans(interval, tx, scan_store, oc_cfg, dedup).await;
+            scanner::run_periodic_scans(interval, tx, scan_store, oc_cfg, dedup, profiles).await;
         });
     }
 

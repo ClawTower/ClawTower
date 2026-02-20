@@ -36,6 +36,17 @@ pub struct AgentMeta {
     /// Workspace directory where identity/cognitive files live
     #[serde(default)]
     pub workspace_dir: String,
+    /// Process name for pgrep (defaults to `user` if empty)
+    #[serde(default)]
+    pub process_name: String,
+}
+
+impl AgentMeta {
+    /// Returns the process name to use for pgrep lookups.
+    /// Falls back to the Unix username if `process_name` is not set.
+    pub fn effective_process_name(&self) -> &str {
+        if self.process_name.is_empty() { &self.user } else { &self.process_name }
+    }
 }
 
 /// Configuration for cognitive identity files that define an agent's personality.

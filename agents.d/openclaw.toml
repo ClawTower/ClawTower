@@ -6,6 +6,7 @@
 [agent]
 name = "OpenClaw"
 user = "openclaw"
+process_name = "openclaw"
 home_dir = "/home/openclaw"
 workspace_dir = "/home/openclaw/.openclaw/workspace"
 

@@ -8,6 +8,7 @@
 
 use super::{ScanResult, ScanStatus};
 use super::helpers::run_cmd;
+use crate::agent::profile::AgentProfile;
 
 /// Check loaded kernel modules for suspicious names (rootkit, backdoor, keylog, etc.).
 pub fn scan_kernel_modules() -> ScanResult {
@@ -213,7 +214,7 @@ pub fn parse_disk_usage(output: &str) -> ScanResult {
 }
 
 /// Scan environment variables for suspicious LD_PRELOAD, proxy configs, debug flags, and leaked credentials.
-pub fn scan_environment_variables() -> ScanResult {
+pub fn scan_environment_variables_with_profiles(profiles: &[AgentProfile]) -> ScanResult {
     let mut issues = Vec::new();
 
     // Check current environment for suspicious variables
@@ -237,13 +238,22 @@ pub fn scan_environment_variables() -> ScanResult {
         }
     }
 
-    // Check OpenClaw agent environment specifically
-    if let Ok(openclaw_pid) = run_cmd("pgrep", &["openclaw"]) {
-        if let Ok(env_content) = std::fs::read_to_string(format!("/proc/{}/environ", openclaw_pid.trim())) {
-            let env_vars: Vec<&str> = env_content.split('\0').collect();
-            for var in env_vars {
-                if var.starts_with("AWS_SECRET_ACCESS_KEY=") || var.starts_with("ANTHROPIC_API_KEY=") {
-                    issues.push("Credentials found in agent environment".to_string());
+    // Check each agent's environment for leaked credentials
+    let process_names: Vec<&str> = if profiles.is_empty() {
+        vec!["openclaw"]
+    } else {
+        profiles.iter().map(|p| p.agent.effective_process_name()).collect()
+    };
+    for process in &process_names {
+        if let Ok(pid_output) = run_cmd("pgrep", &[process]) {
+            for pid in pid_output.trim().lines() {
+                if let Ok(env_content) = std::fs::read_to_string(format!("/proc/{}/environ", pid.trim())) {
+                    let env_vars: Vec<&str> = env_content.split('\0').collect();
+                    for var in env_vars {
+                        if var.starts_with("AWS_SECRET_ACCESS_KEY=") || var.starts_with("ANTHROPIC_API_KEY=") {
+                            issues.push(format!("Credentials found in {} environment", process));
+                        }
+                    }
                 }
             }
         }
@@ -254,6 +264,11 @@ pub fn scan_environment_variables() -> ScanResult {
     } else {
         ScanResult::new("environment_vars", ScanStatus::Warn, &format!("Environment issues: {}", issues.join("; ")))
     }
+}
+
+/// Backwards-compatible wrapper.
+pub fn scan_environment_variables() -> ScanResult {
+    scan_environment_variables_with_profiles(&[])
 }
 
 #[cfg(test)]
