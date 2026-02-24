@@ -73,6 +73,8 @@ pub struct Config {
     pub prompt_firewall: PromptFirewallConfig,
     #[serde(default)]
     pub memory_sentinel: MemorySentinelConfig,
+    #[serde(default)]
+    pub dashboard: DashboardConfig,
 }
 
 /// Behavior detection engine configuration.
@@ -380,6 +382,30 @@ impl Default for ApiConfig {
             port: 18791,
             auth_token: String::new(),
             cors_origin: None,
+        }
+    }
+}
+
+/// Embedded web dashboard configuration.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct DashboardConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_dashboard_bind")]
+    pub bind: String,
+    #[serde(default = "default_dashboard_port")]
+    pub port: u16,
+}
+
+fn default_dashboard_bind() -> String { "0.0.0.0".to_string() }
+fn default_dashboard_port() -> u16 { 1337 }
+
+impl Default for DashboardConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            bind: default_dashboard_bind(),
+            port: default_dashboard_port(),
         }
     }
 }
